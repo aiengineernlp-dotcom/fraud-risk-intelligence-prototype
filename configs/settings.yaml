@@ -1,0 +1,34 @@
+# -----------------------------------------------------------------------------
+# SoC layer      : Configuration
+# Responsibility : Operating settings: bounded retries, timeouts, review-routing margin, file paths
+# Never does     : Hold a secret (secrets live in .env only) or the decision threshold / risk-band
+#                  bounds (single source: artifacts/models/model_metadata.json, D-12, I20)
+# Reference      : Architecture_Projet.md v1.1 — section 4 (D-08, D-12), section 7, section 8 (n° 06)
+# -----------------------------------------------------------------------------
+
+# --- Bounded retries and timeouts (D-08) --------------------------------------
+# Starting values (I07); confirmed at J4 after measuring real latency.
+retries:
+  tools:
+    max_retries: 2              # new attempts after the first call
+    timeout_seconds: 5
+  llm:
+    max_retries_after_rejection: 2
+    timeout_seconds: 30
+
+# --- Review routing (routing_policy.py, n° 54) -------------------------------
+routing:
+  near_threshold_margin: null   # fixed at J3 with the operational objective (I08) — nothing invented
+
+# --- File paths, relative to the repository root (section 7) ------------------
+paths:
+  raw_data_dir: data/raw                                  # not versioned (D-15)
+  runtime_db: data/runtime/capstone.db                    # not versioned, created at launch
+  demo_cases: data/demo/cases.json
+  evidence_store: data/demo/evidence_store.json
+  model_pipeline: artifacts/models/final_pipeline.joblib  # not versioned, rebuilt by python -m src.train
+  mlp_state: artifacts/models/mlp_state.pt
+  model_metadata: artifacts/models/model_metadata.json    # holds threshold and band bounds (I20)
+  metrics_dir: artifacts/metrics
+  figures_dir: artifacts/figures
+  prohibited_terms: configs/prohibited_terms.yaml

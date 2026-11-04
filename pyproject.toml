@@ -1,0 +1,18 @@
+# -----------------------------------------------------------------------------
+# SoC layer      : Configuration
+# Responsibility : Configure pytest (import path, test folder, declared markers)
+# Never does     : Declare dependencies (requirements.txt does) or hold application settings
+# Reference      : Architecture_Projet.md — section 4 (D-14), section 8 (n° 04)
+# -----------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+# Repository root on the import path, so tests can write `import src.config`
+# without __init__.py files (namespace packages, D-14).
+pythonpath = ["."]
+testpaths = ["tests"]
+# A misspelt marker fails instead of being silently ignored: the count of
+# validation-workflow tests (brief §14: at least five) stays trustworthy.
+addopts = "--strict-markers"
+markers = [
+    "validation_workflow: test of the agent / LLM draft-validation workflow (brief §14)",
+]

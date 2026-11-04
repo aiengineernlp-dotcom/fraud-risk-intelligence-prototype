@@ -1,0 +1,33 @@
+# -----------------------------------------------------------------------------
+# SoC layer      : Infrastructure
+# Responsibility : Pin every third-party library the project uses, one exact version each
+# Never does     : Add a library that no registered file uses
+# Reference      : Architecture_Projet.md — section 2 (stack), section 8 (n° 03)
+# Checked        : 2026-11-04 on PyPI, for Python 3.11 and 3.13 (macOS arm64 wheels available); project venv: 3.13
+# Install        : python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+# -----------------------------------------------------------------------------
+
+# --- Data and classical ML (training pipeline, brief §5–§8) -------------------
+numpy==2.4.6            # 2.5.x requires Python >= 3.12
+pandas==3.1.0
+scikit-learn==1.9.1
+joblib==1.6.0           # saves / reloads the fitted pipeline (D-12)
+matplotlib==3.11.2
+seaborn==0.13.2
+
+# --- Deep learning (MLP, brief §9, D-02) --------------------------------------
+torch==2.15.0
+
+# --- LLM client and draft validation (layers 3–4, D-04) -----------------------
+openai==3.45.0          # used only as a client of the OpenAI-compatible protocol
+pydantic==2.14.2        # schema of the investigation draft (validator)
+
+# --- Configuration (n° 06–07) -------------------------------------------------
+PyYAML==6.0.3           # reads configs/settings.yaml
+python-dotenv==1.2.4    # reads .env
+
+# --- Application (layer 5, D-01) ----------------------------------------------
+streamlit==1.66.1
+
+# --- Tests (brief §14) --------------------------------------------------------
+pytest==9.2.0
