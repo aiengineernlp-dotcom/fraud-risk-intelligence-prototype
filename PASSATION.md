@@ -7,7 +7,7 @@
 ## 1. OÙ ON EN EST
 - Phase : Phase 1 – J3 Modèles · mode de build : guidé
 - Tâche ou séance en cours : J3, séance 1 — ouverture courte (§0bis) puis n° 16 `src/data/split.py`
-- Arrêtée exactement à : J2 FROZEN (commit `364b660`, tag `vj2-donnees-frozen`) ; J3 pas encore commencé
+- Arrêtée exactement à : Handoff J3 ✅ ; ouverture courte J3 ✅ (Q04 B134, Q01 B10) ; prochain : n° 16 src/data/split.py (décision h : proportions + graine)
 - Branche / pull request : `main`, rien d'ouvert ; git status propre
 - Décisions héritées du J2 à ne pas rediscuter : PR-AUC et F1 comme métriques principales ; analyse VIF avant feature engineering ; feature `is_risky_type` (TRANSFER+CASH_OUT uniquement) ; `isFlaggedFraud` gardé dans le schéma pour détecter la fuite de cible, jamais utilisé comme feature ; `artifacts/models/` ignoré de git, `metrics/` et `figures/` versionnés (D-15)
 - Supposé à tester au début du J3 : `torch` s'importe et s'entraîne correctement sur cette machine — risque si faux : J3 MLP bloqué
@@ -24,6 +24,7 @@
 - [x] n° 14 `notebooks/01_eda.ipynb` Temps 1 + Temps 2 ✅ — preuve : nbconvert exécuté, 6 figures affichées
 - [x] n° 15 `data/README.md` Temps 1 + Temps 2 ✅ — preuve : fiche PaySim complète, déplacée de `src/data/`
 - [x] Freeze J2 — preuve : commit `364b660`, tag `vj2-donnees-frozen`, poussés
+- [x] Handoff + ouverture courte J3 — preuve : 6 passed, torch 2.8.0 OK, tag vj2 poussé ; B10 et B134 ✅ dans Journal_Build.md
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
 - [ ] Ouverture courte J3 (§0bis) — vue d'ensemble des fichiers n°16 à 28
@@ -69,6 +70,8 @@
 - Fichiers autorisés : `src/data/split.py`, `tests/test_split.py`, `src/features/build_features.py`, `tests/test_features.py`, `src/models/model_io.py`, `src/models/train_classical.py`, `src/models/train_mlp.py`, `src/models/evaluate.py`, `src/models/threshold.py`, `tests/test_threshold.py`, `src/models/explain.py`, `src/train.py`, `tests/test_models.py` ; générés : `artifacts/models/` (3 fichiers), `artifacts/metrics/` (4 fichiers)
 - À lire d'abord : ce fichier ; `Build_Control.md` (J3) ; `Architecture_Projet.md` v1.1 §8 (n°16 à 28) ; `Matrice_Conformite.md` R076 et suivants ; `Donnees_et_Modeles.md` (décisions J3)
 - Préalables : `.venv` activé ; pytest J2 100 % vert avant tout nouveau fichier
+- Tâche : J3 séance 2 — coller AS-13 et AS-14 dans AMELIORATION_SYSTEME ; trancher I32 (J4 en vibe coding) et I35 (Temps 2 par étape pour les fichiers simples) ; Temps 2 du n° 16 (Q01 stratification) ; puis n° 17
+
 
 ## 8. JOURNAL DES PASSAGES — ajout seul
 | Date | Qui (outil, modèle si connu) | Mode | Ce qui a été fait | Commit / pull request | Statut laissé |
@@ -79,3 +82,4 @@
 | 2026-11-07 | Claude (chat « Capstone · M4 · Phase 1 – J2 données ») | guidé | J2 : propositions v2.15.6 appliquées ; n° 09 Temps 2 ✅ | — | en cours |
 | 2026-11-10 | Claude (chat « Capstone · M5 · Phase 1 – J2 données ») | guidé | J2 (suite) : n° 10 load_paysim.py ✅ ; n° 11 conftest.py ✅ ; n° 12 test_data_schema.py ✅ ; n° 13 eda.py ✅ ; n° 14 01_eda.ipynb ✅ ; n° 15 data/README.md ✅ ; Freeze J2 | commit `364b660`, tag `vj2-donnees-frozen` | J2 FROZEN — J3 à démarrer dans nouveau chat M5 |
 | 2026-11-10 | Claude (chat « Capstone · M4 · Phase 1 – J2 données ») | guidé | Fin J2 : AS-07/AS-08/AS-09 dans AMELIORATION_SYSTEME.md ; message de reprise M5 produit ; PASSATION mise à jour | — | prêt à fermer |
+| 2026-11-10 | Claude (chat « Capstone · M4 · Phase 1 – J3 modèles ») | guidé | J3 : Handoff ✅, tag vj2 poussé, ouverture courte ✅ | — | en cours |
