@@ -25,7 +25,8 @@ from src.agent.state_machine import (
     is_terminal,
 )
 
-# The section 3bis table, written out by hand so the test does not just re-read the code.
+# The section 3bis (v1.2, decision I45) table, written out by hand so the test does not just
+# re-read the code: 15 allowed transitions.
 EXPECTED_TRANSITIONS = {
     (CaseState.RECEIVED, CaseState.SCORED),
     (CaseState.SCORED, CaseState.EVIDENCE_READY),
@@ -40,6 +41,8 @@ EXPECTED_TRANSITIONS = {
     (CaseState.SCORED, CaseState.FAILED),
     (CaseState.EVIDENCE_READY, CaseState.FAILED),
     (CaseState.DRAFTED, CaseState.FAILED),
+    (CaseState.VALIDATED, CaseState.FAILED),
+    (CaseState.HUMAN_REVIEW, CaseState.FAILED),
 }
 
 ALL_PAIRS = set(itertools.product(CaseState, repeat=2))
@@ -67,6 +70,7 @@ def test_valid_path() -> None:
 
 
 def test_table_matches_section_3bis() -> None:
+    assert len(EXPECTED_TRANSITIONS) == 15
     coded = {(src, dst) for src, targets in ALLOWED_TRANSITIONS.items() for dst in targets}
     assert coded == EXPECTED_TRANSITIONS
 

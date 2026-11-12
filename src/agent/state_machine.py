@@ -16,11 +16,10 @@ from src.agent.domain import CaseState
 # A case is created in RECEIVED once intake_case has accepted the input (section 3bis).
 INITIAL_STATE = CaseState.RECEIVED
 
-# Allowed transitions, copied from the table of Architecture_Projet.md section 3bis.
+# Allowed transitions, copied from the table of Architecture_Projet.md section 3bis (v1.2, decision I45).
 # Anything not listed here is refused.
-# Decision: FAILED is reachable only from RECEIVED, SCORED, EVIDENCE_READY and DRAFTED
-# (the steps that call a tool or the LLM), as in section 3bis — not from VALIDATED or
-# HUMAN_REVIEW, although the brief §11.3 says "any step" (gap noted in PASSATION.md §6).
+# Rule I45: FAILED is reachable from every non-final state (RECEIVED, SCORED, EVIDENCE_READY,
+# DRAFTED, VALIDATED, HUMAN_REVIEW), as in the brief §11.3 "Any step -> FAILED".
 ALLOWED_TRANSITIONS: dict[CaseState, frozenset[CaseState]] = {
     CaseState.RECEIVED: frozenset({CaseState.SCORED, CaseState.FAILED}),
     CaseState.SCORED: frozenset({CaseState.EVIDENCE_READY, CaseState.FAILED}),
@@ -29,9 +28,14 @@ ALLOWED_TRANSITIONS: dict[CaseState, frozenset[CaseState]] = {
         {CaseState.VALIDATED, CaseState.VALIDATION_REJECTED, CaseState.FAILED}
     ),
     # A validated draft always goes to a human (brief §11.6).
-    CaseState.VALIDATED: frozenset({CaseState.HUMAN_REVIEW}),
+    CaseState.VALIDATED: frozenset({CaseState.HUMAN_REVIEW, CaseState.FAILED}),
     CaseState.HUMAN_REVIEW: frozenset(
-        {CaseState.CLOSED, CaseState.ESCALATED, CaseState.NEEDS_MORE_INFORMATION}
+        {
+            CaseState.CLOSED,
+            CaseState.ESCALATED,
+            CaseState.NEEDS_MORE_INFORMATION,
+            CaseState.FAILED,
+        }
     ),
 }
 

@@ -18,6 +18,7 @@
 - [x] Branche par défaut GitHub passée de `developpement` à `main` (2026-11-12, `HEAD branch: main`)
 - [ ] Mise en place vérifiée (T08) : en cours — voir `01_sessions/Build_Control.md`, section VIBE CODING CONTRÔLÉ (non touché par la PR 1)
 - [x] PR 1 — G01, G02 : `src/agent/domain.py` (n° 32), `src/agent/state_machine.py` (n° 42), `tests/test_state_machine.py` (n° 43) — commit `9401da5` ; `.venv/bin/python -m pytest -q` → 58 passed in 28.65s (2026-11-12 ; 40 anciens + 18 nouveaux, dont `test_valid_path`, `test_invalid_transition_rejected`, `test_terminal_states_are_final` et les 13 transitions autorisées une par une)
+- [x] PR 1 — décision I45 (Q-06) : FAILED ajouté aux transitions de VALIDATED et HUMAN_REVIEW (15 transitions autorisées) ; `.venv/bin/python -m pytest -q` → 60 passed in 8.50s (2026-11-12)
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
 - [ ] PR 1 — finir : pousser `tache/G01-machine-etats` (fondateur approuve), ouvrir la pull request (fondateur), CI verte, Temps 2
@@ -56,16 +57,16 @@
 - Q-02 Message à l'enseignant : travail seul accepté ? allègement possible (R177 : seulement par écrit) ?
 - Q-03 Deux identifiants locaux à ajouter dans `99_PRIVE/MOTS_SENSIBLES_C10.txt` (liste hors dépôt)
 - Q-05 (PR 1) G02 demande un test du refus **et de l'événement d'audit** ; l'audit n'existe pas encore → PR 1 teste seulement le refus. À couvrir avec l'orchestrateur (PR 10, action `invalid_transition`). Le §3bis et G02 restent tels quels ; décision du fondateur sur le report
-- Q-06 (PR 1) Écart énoncé §11.3 « Any step → FAILED » ↔ `Architecture_Projet.md` §3bis (FAILED seulement depuis RECEIVED, SCORED, EVIDENCE_READY, DRAFTED). Le code suit le §3bis (choix validé au plan) : VALIDATED → FAILED et HUMAN_REVIEW → FAILED refusées. À justifier à l'oral ou à corriger dans `docs/specs/` par le fondateur
+- Q-06 (PR 1) — **tranchée : I45** — FAILED atteignable depuis tous les états non finaux (énoncé §11.3 « Any step → FAILED ») ; `Architecture_Projet.md` §3bis v1.2 ; VALIDATED → FAILED et HUMAN_REVIEW → FAILED ajoutées dans `state_machine.py` (15 transitions). Copie de `docs/specs/` (encore v1.1) mise à jour sur `main` par le fondateur après la fusion
 - Q-07 (PR 1) Tests de la machine à états non marqués `validation_workflow` (ce ne sont pas des tests du flux de validation du brouillon) — choix validé au plan
 - Q-04 `.claude/settings.local.json` (créé par Claude Code) à ignorer dans `.gitignore` (fichier gelé n° 01 : porte G2, décision du fondateur)
 
 ## 7. PROCHAINE SÉANCE — LA TÂCHE DU PROCHAIN
 - Tâche : d'abord clore la PR 1 (CI verte sur `tache/G01-machine-etats`, Temps 2 du fondateur, fusion par le fondateur). Puis PR 2 — D07 : n° 40 `src/models/risk_bands.py`, n° 41 `tests/test_risk_bands.py`, **seulement après la décision du fondateur sur les bornes** (`risk_band_bounds: null`) ; sinon PR 3 🔒 (n° 33, 34, 35 — plan et GO obligatoires, zone sensible)
-- Critère de fin : celui de la ligne de la tâche dans `docs/specs/Features_Complet.md` et du §8 de `Architecture_Projet.md` ; tous les tests existants (58) toujours verts ; CI verte ; branche `tache/[ID]-[nom-court]` poussée ; `PASSATION.md` à jour dans la branche
+- Critère de fin : celui de la ligne de la tâche dans `docs/specs/Features_Complet.md` et du §8 de `Architecture_Projet.md` ; tous les tests existants (60) toujours verts ; CI verte ; branche `tache/[ID]-[nom-court]` poussée ; `PASSATION.md` à jour dans la branche
 - Fichiers autorisés : ceux de la tâche seulement. Interdit : tout fichier de `.github/protected_paths.txt`
 - À lire d'abord : `AGENTS.md` ; ce fichier ; `src/agent/domain.py` et `src/agent/state_machine.py` (types et états à réutiliser, ne pas redéfinir) ; `docs/specs/Architecture_Projet.md` §3bis, §5, §8, §10
-- Préalables : `main` à jour avec la PR 1 fusionnée ; `.venv/bin/python -m pytest -q` → 58 passed
+- Préalables : `main` à jour avec la PR 1 fusionnée ; `.venv/bin/python -m pytest -q` → 60 passed
 
 ## 8. JOURNAL DES PASSAGES — ajout seul
 | Date | Qui (outil, modèle si connu) | Mode | Ce qui a été fait | Commit / pull request | Statut laissé |
@@ -80,3 +81,4 @@
 | 2026-11-12 | Claude (chat « Capstone · M4 · Phase 1 – J3 modèles ») | guidé | J3 : n° 16–28, n° 06–07 (G2), entraînement complet, 40 tests ; gel avec 8 Temps 2 🟡 (I39) | tag `vj3-modeles-frozen` | J3 FROZEN — J4 dans un nouveau chat |
 | 2026-11-12 | Claude (chat « Capstone · M4 · Phase 1 – J4 agent et LLM ») | vibe coding contrôlé (mise en place) | J4 : Handoff ✅ (40 passed), ouverture courte (B162 🟡), mise en place T01–T07 posée : `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, CI, `docs/specs/` | commit de mise en place (fondateur) | À VÉRIFIER — essais T08 à faire |
 | 2026-11-12 | Claude Code (Opus 5.5) | vibe coding contrôlé | PR 1 — G01, G02 : n° 32 `domain.py`, n° 42 `state_machine.py`, n° 43 `test_state_machine.py` ; 58 passed ; Q-05 à Q-07 | branche `tache/G01-machine-etats`, commit `9401da5` | À VÉRIFIER |
+| 2026-11-12 | Claude Code (Opus 5.5) | vibe coding contrôlé | PR 1 — décision I45 : FAILED depuis VALIDATED et HUMAN_REVIEW (n° 42, 43) ; 60 passed ; Q-06 tranchée | branche `tache/G01-machine-etats` | À VÉRIFIER |
