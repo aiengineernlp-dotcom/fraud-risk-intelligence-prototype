@@ -95,4 +95,4 @@ def test_frame_without_fraud_is_refused() -> None:
 def test_validation_without_fraud_is_refused() -> None:
     frame = _frame(fraud_steps=range(1, 21))  # frauds only in the first 20 hours
     with pytest.raises(SplitError, match="validation part contains no fraud"):
-        temporal_split(frame, **SHARES)
+        temporal_split(frame, **SHARES)# essai protected-paths
