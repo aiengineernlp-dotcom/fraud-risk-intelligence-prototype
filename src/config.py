@@ -3,8 +3,9 @@ SoC layer      : Transverse
 Responsibility : Load `.env` and `configs/settings.yaml` into one typed, read-only object
 Never does     : Business logic; print or log a secret; hold the decision threshold or band bounds
                  (single source: model_metadata.json, D-12 / I20)
-Reference      : Architecture_Projet.md v1.1 — section 4 (D-04, D-08, D-12), section 8 (n° 07)
-"""
+Reference      : Architecture_Projet.md v1.1 — section 4 (D-04, D-08, D-12), section 8 (n° 07);
+                 SplitSettings added at J3 (I34, porte G2, 2026-11-11)
+                 """
 
 from __future__ import annotations
 
@@ -62,6 +63,14 @@ class RetrySettings:
     timeout_seconds: float
 
 
+
+@dataclass(frozen=True)
+class SplitSettings:
+    seed: int
+    val_size: float   # share of ALL rows
+    test_size: float  # share of ALL rows
+
+
 @dataclass(frozen=True)
 class LLMSettings:
     provider: str
@@ -89,6 +98,8 @@ class AppConfig:
     tool_retries: RetrySettings
     llm_retries: RetrySettings
     near_threshold_margin: float | None  # None until fixed at J3 (I08)
+    review_capacity_per_day: int
+    split: SplitSettings
     paths: Paths
     llm: LLMSettings
 
@@ -105,6 +116,8 @@ def load_config(
         tool_retries=_retry(settings, "tools", "max_retries"),
         llm_retries=_retry(settings, "llm", "max_retries_after_rejection"),
         near_threshold_margin=_margin(settings),
+        review_capacity_per_day=_capacity(settings),
+        split=_split(settings),
         paths=_paths(settings),
         llm=_llm_from_environment(),
     )
@@ -146,6 +159,26 @@ def _margin(settings: dict[str, Any]) -> float | None:
     if not isinstance(margin, (int, float)) or isinstance(margin, bool) or not 0 <= margin <= 1:
         raise ConfigError("routing.near_threshold_margin must be empty or a number between 0 and 1")
     return float(margin)
+
+def _capacity(settings: dict[str, Any]) -> int:
+    capacity = _section(settings, "routing", "review_capacity_per_day")
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
+        raise ConfigError("routing.review_capacity_per_day must be a whole number >= 1")
+    return capacity
+
+
+def _split(settings: dict[str, Any]) -> SplitSettings:
+    seed = _section(settings, "split", "seed")
+    val_size = _section(settings, "split", "val_size")
+    test_size = _section(settings, "split", "test_size")
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+        raise ConfigError("split.seed must be an integer >= 0")
+    for name, share in (("val_size", val_size), ("test_size", test_size)):
+        if not isinstance(share, (int, float)) or isinstance(share, bool) or not 0 < share < 1:
+            raise ConfigError(f"split.{name} must be a number strictly between 0 and 1")
+    if val_size + test_size >= 1:
+        raise ConfigError("split.val_size + split.test_size must leave rows for train (< 1)")
+    return SplitSettings(seed=seed, val_size=float(val_size), test_size=float(test_size))
 
 
 def _paths(settings: dict[str, Any]) -> Paths:

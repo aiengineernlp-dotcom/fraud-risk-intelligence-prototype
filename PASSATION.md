@@ -5,73 +5,50 @@
 > No secret, no real data, no internal information.
 
 ## 1. OÙ ON EN EST
-- Phase : Phase 1 – J3 Modèles · mode de build : guidé
-- Tâche ou séance en cours : J3, séance 1 — ouverture courte (§0bis) puis n° 16 `src/data/split.py`
-- Arrêtée exactement à : Handoff J3 ✅ ; ouverture courte J3 ✅ (Q04 B134, Q01 B10) ; prochain : n° 16 src/data/split.py (décision h : proportions + graine)
-- Branche / pull request : `main`, rien d'ouvert ; git status propre
-- Décisions héritées du J2 à ne pas rediscuter : PR-AUC et F1 comme métriques principales ; analyse VIF avant feature engineering ; feature `is_risky_type` (TRANSFER+CASH_OUT uniquement) ; `isFlaggedFraud` gardé dans le schéma pour détecter la fuite de cible, jamais utilisé comme feature ; `artifacts/models/` ignoré de git, `metrics/` et `figures/` versionnés (D-15)
-- Supposé à tester au début du J3 : `torch` s'importe et s'entraîne correctement sur cette machine — risque si faux : J3 MLP bloqué
+- Phase : Phase 1 – J3 Modèles **FROZEN** (tag `vj3-modeles-frozen`) · prochaine : Phase 1 – J4 Agent et LLM, **vibe coding contrôlé** (AS-15 : J3 non gelé le 2026-11-11 à 24 h)
+- Arrêtée exactement à : gel du J3 (2026-11-12) ; J4 pas commencé
+- Branche / pull request : `main` ; rien d'ouvert
+- Décisions J3 à ne pas rediscuter : découpage stratifié 70/15/15, graine 42 dans `configs/settings.yaml` (I34) ; 12 variables, `newbalance…` retirées après VIF, `hour_of_day` au lieu de `step` (I36) ; modèle final Random Forest, choisi sur la PR-AUC de validation (I09) ; seuil 0,5492 pour 300 cas/jour, marge 0,05 (I08) ; permutation seule (I10) ; seuil et métadonnées seulement dans `model_metadata.json` (I20)
+- Ouvert : 8 Temps 2 🟡 à reformuler avant l'oral (I39) ; `risk_band_bounds: null` → fixées au J4 (n° 40)
 
 ## 2. FAIT — AVEC PREUVE
-- [x] J1 : fichiers 01 à 08 — preuve : commit `6f6c050`, tag `vj1-cadrage-frozen`, empreintes SHA-256 dans Journal_Build.md
-- [x] Handoff du J2 (2026-11-04) — preuve : `git describe` → `vj1-cadrage-frozen`, `git status` vide, `load_config` OK, `pytest --co -q` sans erreur
-- [x] PaySim dans `data/raw/PS_20174392719_1491204439457_log.csv` (471 Mo) — preuve : SHA-256 `16910f90…e4eea6b`, ignoré par `.gitignore`
-- [x] n° 09 `src/data/schema.py` Temps 1 + Temps 2 ✅ — preuve : SHA-256 `2d9c90bf…`, 7 questions validées 2026-11-07
-- [x] n° 10 `src/data/load_paysim.py` Temps 1 + Temps 2 ✅ — preuve : Shape (6 362 620, 11), schéma validé, Python 3.13.9
-- [x] n° 11 `tests/conftest.py` Temps 1 + Temps 2 ✅
-- [x] n° 12 `tests/test_data_schema.py` Temps 1 + Temps 2 ✅ — preuve : pytest vert
-- [x] n° 13 `src/data/eda.py` Temps 1 + Temps 2 ✅ — preuve : 6 PNG dans `artifacts/figures/`
-- [x] n° 14 `notebooks/01_eda.ipynb` Temps 1 + Temps 2 ✅ — preuve : nbconvert exécuté, 6 figures affichées
-- [x] n° 15 `data/README.md` Temps 1 + Temps 2 ✅ — preuve : fiche PaySim complète, déplacée de `src/data/`
-- [x] Freeze J2 — preuve : commit `364b660`, tag `vj2-donnees-frozen`, poussés
-- [x] Handoff + ouverture courte J3 — preuve : 6 passed, torch 2.8.0 OK, tag vj2 poussé ; B10 et B134 ✅ dans Journal_Build.md
+- [x] J1, J2 FROZEN — tags `vj1-cadrage-frozen`, `vj2-donnees-frozen` (poussés)
+- [x] J3 : n° 16 à 28 posés, Temps 1 ✅ ; n° 06 et n° 07 modifiés au J3 (porte G2 : sections `split`, `routing`) — empreintes SHA-256 dans `Journal_Build.md`
+- [x] Tests : 40 passed (`.venv/bin/python -m pytest -q`, 2026-11-12)
+- [x] Entraînement complet `python -m src.train` (2026-11-11, 3 min 56) — test, une seule fois : PR-AUC 0,908, rappel 0,863, précision 0,776, seuil 0,5492 (`artifacts/metrics/test_results.json`) ; fig07 à fig10 générées
+- [x] `Donnees_et_Modeles.md` §4–§12 et `Preparation_Questions.md` (hors dépôt) remplis
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
-- [ ] Ouverture courte J3 (§0bis) — vue d'ensemble des fichiers n°16 à 28
-- [ ] n° 16 `src/data/split.py` — stratified train/val/test split
-- [ ] n° 17 `tests/test_split.py`
-- [ ] n° 18 `src/features/build_features.py` — VIF + is_risky_type
-- [ ] n° 19 `tests/test_features.py`
-- [ ] n° 20 `src/models/model_io.py`
-- [ ] n° 21 `src/models/train_classical.py`
-- [ ] n° 22 `src/models/train_mlp.py`
-- [ ] n° 23 `src/models/evaluate.py`
-- [ ] n° 24 `src/models/threshold.py`
-- [ ] n° 25 `tests/test_threshold.py`
-- [ ] n° 26 `src/models/explain.py`
-- [ ] n° 27 `src/train.py`
-- [ ] n° 28 `tests/test_models.py`
-- [ ] `Donnees_et_Modeles.md` partie modèles ; `Rapport_Technique.md` sections données + modèles
-- [ ] Freeze J3 (tag `vj3-modeles-frozen`)
+- [ ] J4 : mise en place du vibe coding contrôlé (`02_BUILD/03_VIBE_CODING_CONTROLE.md` §2 : `main` protégée, accès de l'agent limité au dépôt, `AGENTS.md`, `docs/specs/`, CI qui lance les tests)
+- [ ] J4 : n° 32 à 65 (agent, outils, validateur, LLM, orchestrateur), une pull request par petite tâche, Temps 2 dans le chat J4 avant chaque fusion
+- [ ] J5 : n° 66 à 72 (+ corriger les manques C2 du J2 : `data/README.md` R049, R055, R064, R082 ; notebook R061–R074, chemin absolu `os.chdir`)
+- [ ] J6 : README final, rapport, déclaration IA, présentation, vidéo
+- [ ] Avant l'oral : les 8 🟡 (I39) et la simulation de défense
 
 ## 4. VÉRIFIÉ / SUPPOSÉ
-- Vérifié : PaySim — 11 colonnes, 6 362 620 lignes, taux de fraude ~0,13 %, TRANSFER+CASH_OUT seulement pour fraude, corrélation 1,00 oldbalanceOrg/newbalanceOrig, aucun null
-- Vérifié : la clé n'apparaît jamais dans les journaux — essai avec fausse clé, 2026-11-04
-- Supposé : la mémoire suffit pour charger PaySim en entier (I05 : sous-échantillon stratifié en repli)
-- Supposé : `torch` s'importe et s'entraîne correctement sur cette machine — à tester au début du J3
+- Vérifié : même graine → mêmes lignes (deux jours de suite) ; test ouvert une seule fois dans `train.py` (`X_test` n'existe qu'à l'étape 5)
+- Vérifié : `torch 2.8.0` fonctionne dans le `.venv` — mais `requirements.txt` fixe `torch==2.15.0` : écart à corriger (installation chez l'enseignant)
+- Supposé : `ruff` absent du `.venv` (formatage non lancé au gel)
 
 ## 5. ÉCHECS — NE PAS REFAIRE · INCIDENTS
-- Incident : 2026-11-04 disque plein → `pip install --no-cache-dir`
-- Incident : 2026-11-04 `.venv` créé en Python 3.13 au lieu de 3.11 → 3.13 gardé (I22)
-- Échec : `conda deactivate` avant de créer le `.venv` → vérifier `python3 --version` avant `python3 -m venv`
-- Échec : `schema.py` collé dans `data/` au lieu de `src/data/` → vérifier le chemin exact avant de coller
-- Incident : notebook `01_eda.ipynb` corrompu par PyCharm (JSON stocké comme code) → toujours exécuter avec `jupyter nbconvert --to notebook --execute`, jamais Run dans PyCharm
-- Incident : contexte Claude compressé avant la fin du J2 → J3 a failli démarrer dans le même chat ; détecté par Erman ; règle AS-07 ajoutée
-- Attention : un terminal ouvert en conda (`pre_learn_1`) n'est pas le `.venv` ; toujours `source .venv/bin/activate` puis `python --version` (attendu : 3.13.9)
+- Le shell réactive conda (`(base)`, `(pre_learn_1)`) et `python` est un alias de `python3` → toujours lancer `.venv/bin/python …` (pytest compris : `.venv/bin/python -m pytest`)
+- PyCharm utilise l'interpréteur `pre_learn_1 [3.11]` → le pointer sur `.venv/bin/python`
+- `np.array_equal` sur une Random Forest parallèle échoue (ordre des additions) → `assert_allclose(atol=1e-12)`
+- Wrapper PyTorch refusé par `Pipeline` sans `fit` → `fit` factice + `__sklearn_is_fitted__`
+- Fichiers collés mais non sauvegardés (⌘S) : vérifier sur la machine avant le Temps 1
+- Sous la pression du temps, réponses complétées par l'assistant validées ✅ → AS-17 : 🟡, jamais ✅
 
 ## 6. QUESTIONS ET PROPOSITIONS POUR LE FONDATEUR
-- Q-01 Date exacte de la remise (week-end du 14-15 nov.) — bloquante : non (nécessaire pour recaler le planning)
-- Q-02 Décision vibe coding J4 (I32, 🔵 Hypothèse) — à trancher au Freeze J3
-- Q-03 `ermanw` et `Tony-237` à ajouter dans `99_PRIVE/MOTS_SENSIBLES_C10.txt` — en attente réponse Erman
+- Q-01 Date et heure exactes de la remise (week-end du 14-15 nov.) — bloquante pour le plan J4–J6
+- Q-02 Message à l'enseignant : travail seul accepté ? allègement possible (R177 : seulement par écrit) ?
+- Q-03 `ermanw` et `Tony-237` à ajouter dans `99_PRIVE/MOTS_SENSIBLES_C10.txt`
 
-## 7. PROCHAINE SÉANCE — LA TÂCHE DU PROCHAIN (même format dans les deux modes — v2.14.0)
-- Tâche : Phase 1 – J3 Modèles — ouverture courte (§0bis), puis n° 16 `src/data/split.py`
-- Critère de fin : tous les fichiers n°16 à 28 livrés, Temps 2 ✅, pytest vert, Freeze J3
-- Fichiers autorisés : `src/data/split.py`, `tests/test_split.py`, `src/features/build_features.py`, `tests/test_features.py`, `src/models/model_io.py`, `src/models/train_classical.py`, `src/models/train_mlp.py`, `src/models/evaluate.py`, `src/models/threshold.py`, `tests/test_threshold.py`, `src/models/explain.py`, `src/train.py`, `tests/test_models.py` ; générés : `artifacts/models/` (3 fichiers), `artifacts/metrics/` (4 fichiers)
-- À lire d'abord : ce fichier ; `Build_Control.md` (J3) ; `Architecture_Projet.md` v1.1 §8 (n°16 à 28) ; `Matrice_Conformite.md` R076 et suivants ; `Donnees_et_Modeles.md` (décisions J3)
-- Préalables : `.venv` activé ; pytest J2 100 % vert avant tout nouveau fichier
-- Tâche : J3 séance 2 — coller AS-13 et AS-14 dans AMELIORATION_SYSTEME ; trancher I32 (J4 en vibe coding) et I35 (Temps 2 par étape pour les fichiers simples) ; Temps 2 du n° 16 (Q01 stratification) ; puis n° 17
-
+## 7. PROCHAINE SÉANCE — LA TÂCHE DU PROCHAIN
+- Tâche : Phase 1 – J4 Agent et LLM, nouveau chat (message dans `01_sessions/Prochain_message.md`) — Handoff (J3 FROZEN, 40 tests verts), ouverture courte, puis mise en place du vibe coding contrôlé
+- Critère de fin : n° 32 à 65 fusionnés par pull request, Temps 2 de chaque pull request ✅, tests verts en CI, Freeze J4 (tag `vj4-agent-frozen`)
+- Fichiers autorisés : n° 32 à 65 du registre (`Architecture_Projet.md` §8) ; `AGENTS.md`, `docs/specs/`, `.github/workflows/` (mise en place)
+- À lire d'abord : ce fichier ; `02_BUILD/03_VIBE_CODING_CONTROLE.md` ; `Architecture_Projet.md` §3 (flux), §3bis (états), §8 (n° 32 à 65)
+- Préalables : `.venv/bin/python -m pytest -q` → 40 passed
 
 ## 8. JOURNAL DES PASSAGES — ajout seul
 | Date | Qui (outil, modèle si connu) | Mode | Ce qui a été fait | Commit / pull request | Statut laissé |
@@ -83,3 +60,4 @@
 | 2026-11-10 | Claude (chat « Capstone · M5 · Phase 1 – J2 données ») | guidé | J2 (suite) : n° 10 load_paysim.py ✅ ; n° 11 conftest.py ✅ ; n° 12 test_data_schema.py ✅ ; n° 13 eda.py ✅ ; n° 14 01_eda.ipynb ✅ ; n° 15 data/README.md ✅ ; Freeze J2 | commit `364b660`, tag `vj2-donnees-frozen` | J2 FROZEN — J3 à démarrer dans nouveau chat M5 |
 | 2026-11-10 | Claude (chat « Capstone · M4 · Phase 1 – J2 données ») | guidé | Fin J2 : AS-07/AS-08/AS-09 dans AMELIORATION_SYSTEME.md ; message de reprise M5 produit ; PASSATION mise à jour | — | prêt à fermer |
 | 2026-11-10 | Claude (chat « Capstone · M4 · Phase 1 – J3 modèles ») | guidé | J3 : Handoff ✅, tag vj2 poussé, ouverture courte ✅ | — | en cours |
+| 2026-11-12 | Claude (chat « Capstone · M4 · Phase 1 – J3 modèles ») | guidé | J3 : n° 16–28, n° 06–07 (G2), entraînement complet, 40 tests ; gel avec 8 Temps 2 🟡 (I39) | tag `vj3-modeles-frozen` | J3 FROZEN — J4 dans un nouveau chat |

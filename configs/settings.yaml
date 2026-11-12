@@ -1,9 +1,11 @@
 # -----------------------------------------------------------------------------
 # SoC layer      : Configuration
-# Responsibility : Operating settings: bounded retries, timeouts, review-routing margin, file paths
+# Responsibility : Operating settings: bounded retries, timeouts, review-routing margin, data split,
+#                  file paths
 # Never does     : Hold a secret (secrets live in .env only) or the decision threshold / risk-band
 #                  bounds (single source: artifacts/models/model_metadata.json, D-12, I20)
-# Reference      : Architecture_Projet.md v1.1 — section 4 (D-08, D-12), section 7, section 8 (n° 06)
+# Reference      : Architecture_Projet.md v1.1 — section 4 (D-08, D-12), section 7, section 8 (n° 06);
+#                  `split` section added at J3 (I34, porte G2, 2026-11-11)
 # -----------------------------------------------------------------------------
 
 # --- Bounded retries and timeouts (D-08) --------------------------------------
@@ -18,7 +20,17 @@ retries:
 
 # --- Review routing (routing_policy.py, n° 54) -------------------------------
 routing:
-  near_threshold_margin: null   # fixed at J3 with the operational objective (I08) — nothing invented
+  review_capacity_per_day: 300  # I08: cases the investigation team can review per day (~6 x 50)
+  near_threshold_margin: 0.05   # I08: scores in [threshold - 0.05, threshold) -> priority human review
+
+# --- Data split (split.py, n° 16) — single source of truth (I34) -------------
+# Checked by src/config.py (SplitSettings), passed by src/train.py (n° 27) to the split functions,
+# copied into artifacts/models/model_metadata.json with the model.
+# Changing a value = a new experiment: retrain, then report the new numbers (R102).
+split:
+  seed: 42          # random_state of every random cut: same data + same seed = same rows
+  val_size: 0.15    # share of ALL rows
+  test_size: 0.15   # share of ALL rows -> train keeps 0.70
 
 # --- File paths, relative to the repository root (section 7) ------------------
 paths:
