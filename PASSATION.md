@@ -6,22 +6,22 @@
 
 ## 1. OÙ ON EN EST
 - Phase : Phase 1 – J4 Agent et LLM, **vibe coding contrôlé** (AS-15 ; I35, I39) — agent de code : Claude Code, en local ; Temps 2 de chaque pull request dans le chat « Capstone · M4 · Phase 1 – J4 agent et LLM »
-- Arrêtée exactement à : PR 1 (G01, G02) codée et testée en local dans la branche `tache/G01-machine-etats` (n° 32, 42, 43) ; branche à pousser, pull request à ouvrir par le fondateur, CI pas encore vue ; n° 33 à 41 et 44 à 65 à faire
-- Branche / pull request : `tache/G01-machine-etats` (commit `9401da5` + commit de passation) ; pull request pas encore ouverte
+- Arrêtée exactement à : PR 1 (G01, G02) **fusionnée** dans `main` (pull request #2, merge `157e689`, 2026-11-12, 20 h 50) ; prochaine : PR 2 (D07, n° 40–41) **après la décision du fondateur sur les bornes des bandes** ; n° 33 à 41 et 44 à 65 à faire
+- Branche / pull request : `main` ; rien d'ouvert (PR #1 d'essai fermée sans fusion ; PR #2 fusionnée)
 - Décisions J3 à ne pas rediscuter : découpage stratifié 70/15/15, graine 42 dans `configs/settings.yaml` (I34) ; 12 variables (I36) ; Random Forest choisie sur la PR-AUC de validation (I09) ; seuil 0,5492 pour 300 cas/jour, marge 0,05 (I08) ; permutation seule (I10) ; seuil et métadonnées seulement dans `model_metadata.json` (I20)
 - Décisions J4 : `main` protégée par garde-fous locaux + CI (compte GitHub Free, I40) ; `CLAUDE.md` = `@AGENTS.md` (I41) ; points de contrôle : J4 gelé ven. 13 nov. 23 h 00, J5 gelé sam. 14 nov. 15 h 00, J6 prêt sam. 14 nov. 23 h 59 ; remise dim. 15 nov. 10 h 45 (I42)
-- Ouvert : `risk_band_bounds: null` → bornes à décider par le fondateur avant le n° 40 ; 8 Temps 2 🟡 du J3 + B162 (ouverture J4) à reformuler avant l'oral
+- Ouvert : `risk_band_bounds: null` → bornes à décider par le fondateur avant le n° 40 ; Temps 2 🟡 à reformuler avant l'oral : 8 du J3 + B162 (ouverture J4) + B163 à B166 (PR 1)
 
 ## 2. FAIT — AVEC PREUVE
 - [x] J1, J2, J3 FROZEN — tags `vj1-cadrage-frozen`, `vj2-donnees-frozen`, `vj3-modeles-frozen` (poussés ; `git ls-remote` → `600f8884…`, 2026-11-12)
 - [x] Handoff J4 : `.venv/bin/python -m pytest -q` → 40 passed in 14.21s (2026-11-12, 13 h 45) ; `torch.__version__` → 2.15.0
 - [x] Branche par défaut GitHub passée de `developpement` à `main` (2026-11-12, `HEAD branch: main`)
-- [ ] Mise en place vérifiée (T08) : en cours — voir `01_sessions/Build_Control.md`, section VIBE CODING CONTRÔLÉ (non touché par la PR 1)
+- [x] Mise en place vérifiée (T08) : hook, interdictions chargées (`/permissions`), bypass refusé, mode `accept edits`, CI verte, `protected-paths` rouge sur PR d'essai — preuves dans `01_sessions/Build_Control.md`, section VIBE CODING CONTRÔLÉ (2026-11-12, 16 h 48)
 - [x] PR 1 — G01, G02 : `src/agent/domain.py` (n° 32), `src/agent/state_machine.py` (n° 42), `tests/test_state_machine.py` (n° 43) — commit `9401da5` ; `.venv/bin/python -m pytest -q` → 58 passed in 28.65s (2026-11-12 ; 40 anciens + 18 nouveaux, dont `test_valid_path`, `test_invalid_transition_rejected`, `test_terminal_states_are_final` et les 13 transitions autorisées une par une)
 - [x] PR 1 — décision I45 (Q-06) : FAILED ajouté aux transitions de VALIDATED et HUMAN_REVIEW (15 transitions autorisées) ; `.venv/bin/python -m pytest -q` → 60 passed in 8.50s (2026-11-12)
+- [x] PR 1 fusionnée : pull request #2, CI `tests` ✅ + `protected-paths` ✅, Temps 2 fait (B163 à B166, 🟡), merge `157e689` (2026-11-12)
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
-- [ ] PR 1 — finir : pousser `tache/G01-machine-etats` (fondateur approuve), ouvrir la pull request (fondateur), CI verte, Temps 2
 - [ ] PR 2 — D07 : n° 40 `src/models/risk_bands.py`, n° 41 (après la décision du fondateur sur les bornes)
 - [ ] PR 3 🔒 — n° 33 `db.py`, n° 34 `case_repository.py`, n° 35 `audit_repository.py`
 - [ ] PR 4 — G08 : n° 36, 37, 38, 39
@@ -36,12 +36,12 @@
 
 ## 4. VÉRIFIÉ / SUPPOSÉ
 - Vérifié : `torch 2.15.0` installé dans le `.venv` = `requirements.txt` (2026-11-12). L'écart « 2.8.0 installé » annoncé au J3 était faux.
-- Vérifié : aucun `CLAUDE.md` au-dessus du dépôt ni dans `~/.claude/` ; Claude Code 2.1.220 (lit `AGENTS.md` par l'import de `CLAUDE.md`)
+- Vérifié : aucun `CLAUDE.md` au-dessus du dépôt ni dans `~/.claude/` ; Claude Code **2.1.322** (`claude --version`, 2026-11-12, 16 h 23 ; mis à jour seul depuis 2.1.220) — lit `AGENTS.md`, aussi par l'import de `CLAUDE.md`
 - Supposé : `ruff` absent du `.venv` (formatage non lancé)
 - Vérifié : la PR 1 ne modifie aucun fichier de `.github/protected_paths.txt` (seulement 3 fichiers nouveaux + `PASSATION.md`)
-- Supposé : CI verte sur la PR 1 — pas encore lancée (branche non poussée)
+- Vérifié : CI verte sur la PR 1 (pull request #2 : `tests` ✅ 1 min, `protected-paths` ✅ 5 s)
 - Supposé : les champs proposés pour `ScoreResult`, `EvidenceItem`, `ReviewDecision` suffiront aux PR suivantes (non détaillés dans `docs/specs/`) ; `AuditEvent` suit champ pour champ la table `audit_events` (§10.2), sans `event_id` (attribué par la base)
-- Supposé : les règles `deny` de `.claude/settings.json` sont appliquées par Claude Code 2.1.220 — à prouver par l'essai T08
+- Vérifié : les interdictions de `.claude/settings.json` sont chargées (`/permissions` → Deny, 50 règles, 2026-11-12) ; mode par défaut `accept edits` (I44) — à relire sur la ligne d'état à chaque session (la PR 1 a d'abord tourné en « auto mode »)
 
 ## 5. ÉCHECS — NE PAS REFAIRE · INCIDENTS
 - Le shell réactive conda (`(base)`, `(pre_learn_1)`) et `python` est un alias de `python3` → toujours lancer `.venv/bin/python …` (pytest compris : `.venv/bin/python -m pytest`)
@@ -82,3 +82,4 @@
 | 2026-11-12 | Claude (chat « Capstone · M4 · Phase 1 – J4 agent et LLM ») | vibe coding contrôlé (mise en place) | J4 : Handoff ✅ (40 passed), ouverture courte (B162 🟡), mise en place T01–T07 posée : `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, CI, `docs/specs/` | commit de mise en place (fondateur) | À VÉRIFIER — essais T08 à faire |
 | 2026-11-12 | Claude Code (Opus 5.5) | vibe coding contrôlé | PR 1 — G01, G02 : n° 32 `domain.py`, n° 42 `state_machine.py`, n° 43 `test_state_machine.py` ; 58 passed ; Q-05 à Q-07 | branche `tache/G01-machine-etats`, commit `9401da5` | À VÉRIFIER |
 | 2026-11-12 | Claude Code (Opus 5.5) | vibe coding contrôlé | PR 1 — décision I45 : FAILED depuis VALIDATED et HUMAN_REVIEW (n° 42, 43) ; 60 passed ; Q-06 tranchée | branche `tache/G01-machine-etats` | À VÉRIFIER |
+| 2026-11-12 | Claude (chat « Capstone · M4 · Phase 1 – J4 agent et LLM ») | vibe coding contrôlé | PR 1 : Temps 2 (B163–B166 🟡), décision I45 (Q-06), fusion #2 ; §1, §2, §4 mis à jour (T08 prouvé, version de Claude Code) | merge `157e689` | À VÉRIFIER — fondateur |

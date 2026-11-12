@@ -1,4 +1,4 @@
-> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Architecture_Projet.md, version du 2026-11-11. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
+> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Architecture_Projet.md, version du 2026-11-12. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
 
 # ARCHITECTURE PROJET — Capstone_Project_1
 
@@ -6,7 +6,8 @@
 >   `Syllabus_Mapping.md` v1.0 ; `01_Architecture_Globale.md` (§2bis), `02_Architecture_Globale_AI.md`, `03_Architecture_Globale_ML.md` ;
 >   `02_BUILD/00_Build_Control.md` (précondition d'ouverture du build) ; énoncé du 18 octobre 2026 (§11, §13, §14, §16) · système v2.3.4
 > - Contrôle indépendant réalisé par : aucun
-> - Date : 2026-10-20 · Version : **v1.1** (2026-11-04) — v1.0 **VALIDÉ par Erman le 2026-10-20** (v0.1 : même contenu) · Confidentialité : document INTERNE
+> - Date : 2026-10-20 · Version : **v1.2** (2026-11-12) ; v1.1 (2026-11-04) — v1.0 **VALIDÉ par Erman le 2026-10-20** (v0.1 : même contenu) · Confidentialité : document INTERNE
+> - **Changement de la v1.2** (2026-11-12, décision d'Erman I45) : §3bis — FAILED atteignable depuis **tous les états non finaux** (ajout de VALIDATED → FAILED et HUMAN_REVIEW → FAILED), pour suivre l'énoncé §11.3 « Any step -> FAILED ».
 > - **Changements de la v1.1** (écart de fond, règle C18 — décision d'Erman I20, 2026-11-04) : le seuil et les bornes des bandes ont **une seule source**, `model_metadata.json` (D-12) ; `configs/settings.yaml` (n° 06) ne garde que les réglages d'exploitation ; `risk_bands.py` (n° 40) reçoit les bornes en paramètre au lieu de les lire dans la configuration.
 >
 > (Les décisions encore ouvertes ne se répètent pas ici — elles vivent uniquement en section 9.)
@@ -386,8 +387,8 @@ stateDiagram-v2
 
     FAILED
     note right of FAILED
-        Atteint depuis RECEIVED, SCORED,
-        EVIDENCE_READY ou DRAFTED
+        Atteint depuis tout état non final
+        (RECEIVED à HUMAN_REVIEW, énoncé §11.3)
         en cas de panne ou de délai après M essais
     end note
 
@@ -418,6 +419,8 @@ stateDiagram-v2
     SCORED --> FAILED: idem
     EVIDENCE_READY --> FAILED: idem
     DRAFTED --> FAILED: idem (LLM indisponible)
+    VALIDATED --> FAILED: idem (écriture d'audit ou base)
+    HUMAN_REVIEW --> FAILED: idem (enregistrement de la décision)
     CLOSED --> [*]
     ESCALATED --> [*]
     NEEDS_MORE_INFORMATION --> [*]
@@ -434,7 +437,7 @@ stateDiagram-v2
 | DRAFTED → VALIDATION_REJECTED | Validateur : failed après N essais | `state_machine.py` | `tests/test_orchestrator.py::test_rejected_after_bounded_retries` |
 | VALIDATED → HUMAN_REVIEW | Toujours | `state_machine.py` | `tests/test_orchestrator.py::test_validated_always_goes_to_review` |
 | HUMAN_REVIEW → CLOSED / ESCALATED / NEEDS_MORE_INFORMATION | Relecteur | `state_machine.py` | `tests/test_review_and_audit.py::test_review_decision_recorded` |
-| RECEIVED / SCORED / EVIDENCE_READY / DRAFTED → FAILED | Panne ou délai après M essais | `state_machine.py` | `tests/test_orchestrator.py::test_tool_timeout_leads_to_failed` |
+| RECEIVED / SCORED / EVIDENCE_READY / DRAFTED / VALIDATED / HUMAN_REVIEW → FAILED (énoncé §11.3 « Any step », I45) | Panne ou délai après M essais | `state_machine.py` | `tests/test_orchestrator.py::test_tool_timeout_leads_to_failed` |
 | **Interdite** : RECEIVED → VALIDATED (et toute transition absente du tableau) | — | `state_machine.py` lève `InvalidTransitionError`, et l'audit l'enregistre | `tests/test_state_machine.py::test_invalid_transition_rejected` |
 | **Interdite** : toute sortie d'un état final | — | idem | `tests/test_state_machine.py::test_terminal_states_are_final` |
 
