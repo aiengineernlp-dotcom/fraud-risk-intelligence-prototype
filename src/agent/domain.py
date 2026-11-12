@@ -3,7 +3,7 @@ SoC layer      : Transverse (shared types, imported by layers 2, 3 and 4)
 Responsibility : Name the shared vocabulary of the agent: the 11 case states and the frozen
                  records passed between tools, orchestrator, validator, review and audit
 Never does     : Any logic (no transition rules, no scoring, no banding, no storage, no LLM call)
-Reference      : Architecture_Projet.md v1.1 — section 3bis, section 8 (n° 32), section 10.2;
+Reference      : Architecture_Projet.md v1.2 — section 3bis, section 8 (n° 32), section 10.2;
                  Features_Complet.md G01; brief §11.3, §11.4
 """
 
