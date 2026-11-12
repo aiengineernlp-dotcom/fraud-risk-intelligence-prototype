@@ -6,7 +6,8 @@
 >   `Syllabus_Mapping.md` v1.0 ; `01_Architecture_Globale.md` (§2bis), `02_Architecture_Globale_AI.md`, `03_Architecture_Globale_ML.md` ;
 >   `02_BUILD/00_Build_Control.md` (précondition d'ouverture du build) ; énoncé du 18 octobre 2026 (§11, §13, §14, §16) · système v2.3.4
 > - Contrôle indépendant réalisé par : aucun
-> - Date : 2026-10-20 · Version : **v1.2** (2026-11-12) ; v1.1 (2026-11-04) — v1.0 **VALIDÉ par Erman le 2026-10-20** (v0.1 : même contenu) · Confidentialité : document INTERNE
+> - Date : 2026-10-20 · Version : **v1.3** (2026-11-12) ; v1.2 (2026-11-12) ; v1.1 (2026-11-04) — v1.0 **VALIDÉ par Erman le 2026-10-20** (v0.1 : même contenu) · Confidentialité : document INTERNE
+> - **Changement de la v1.3** (2026-11-12, décisions d'Erman I46, I47) : §8 — ajout du n° 40bis `scripts/set_risk_band_bounds.py` (bornes des bandes écrites dans `model_metadata.json` depuis l'analyse de validation, sans réentraîner).
 > - **Changement de la v1.2** (2026-11-12, décision d'Erman I45) : §3bis — FAILED atteignable depuis **tous les états non finaux** (ajout de VALIDATED → FAILED et HUMAN_REVIEW → FAILED), pour suivre l'énoncé §11.3 « Any step -> FAILED ».
 > - **Changements de la v1.1** (écart de fond, règle C18 — décision d'Erman I20, 2026-11-04) : le seuil et les bornes des bandes ont **une seule source**, `model_metadata.json` (D-12) ; `configs/settings.yaml` (n° 06) ne garde que les réglages d'exploitation ; `risk_bands.py` (n° 40) reçoit les bornes en paramètre au lieu de les lire dans la configuration.
 >
@@ -696,6 +697,7 @@ capstone-project-1/
 | `data/demo/cases.json` · `data/demo/evidence_store.json` | Cas et preuves synthétiques de démo (générés, versionnés) | 1 — Data (généré) | J4 | Produits par le script | Étiquette, donnée personnelle | 38 | `tests/test_security.py` |
 | `src/data/case_input.py` | Valider l'entrée d'un cas (ID, champs vérifiés, types) et rendre un objet typé | 2 — Ingestion/Parser | J4 | `schema.py`, `domain.py`, `config.py` | Décider | 39 | `tests/test_tools.py::test_invalid_input_rejected` |
 | `src/models/risk_bands.py` | Transformer un score en bande low / medium / high selon les bornes reçues en paramètre (lues dans `model_metadata.json` par `score_transaction`, v1.1) | 3 — Logic Engine | J4 | — (bornes reçues en paramètre) | LLM, UI, `config.py` | 40 | `tests/test_risk_bands.py` |
+| `scripts/set_risk_band_bounds.py` | Écrire les bornes des bandes (I46) dans `model_metadata.json` : borne medium = `threshold` des métadonnées ; borne high = seuil de la ligne 200 cas/jour de `threshold_analysis.csv` (validation) ; sans réentraîner (I47) | Entraînement (ML) | J4 | `config.py` (chemins), `artifacts/metrics/threshold_analysis.csv`, `model_metadata.json` | Réentraîner ; ouvrir le test ; inventer une valeur | 40bis | `tests/test_risk_bands.py` (fichiers temporaires) |
 | `tests/test_risk_bands.py` | Chaque score donne une bande ; bornes testées | Tests | J4 | `risk_bands.py` | — | 41 | (fichier de test) |
 | `src/agent/state_machine.py` | États, transitions autorisées, refus des transitions invalides | 3 — Logic Engine | J4 | `domain.py` | LLM, base | 42 | `tests/test_state_machine.py` |
 | `tests/test_state_machine.py` | Chemin valide ; transition invalide refusée ; états finaux définitifs | Tests | J4 | `state_machine.py` | — | 43 | (fichier de test) |

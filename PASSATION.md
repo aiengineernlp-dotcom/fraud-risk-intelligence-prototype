@@ -62,11 +62,15 @@
 - Q-04 `.claude/settings.local.json` (créé par Claude Code) à ignorer dans `.gitignore` (fichier gelé n° 01 : porte G2, décision du fondateur)
 
 ## 7. PROCHAINE SÉANCE — LA TÂCHE DU PROCHAIN
-- Tâche : d'abord clore la PR 1 (CI verte sur `tache/G01-machine-etats`, Temps 2 du fondateur, fusion par le fondateur). Puis PR 2 — D07 : n° 40 `src/models/risk_bands.py`, n° 41 `tests/test_risk_bands.py`, **seulement après la décision du fondateur sur les bornes** (`risk_band_bounds: null`) ; sinon PR 3 🔒 (n° 33, 34, 35 — plan et GO obligatoires, zone sensible)
-- Critère de fin : celui de la ligne de la tâche dans `docs/specs/Features_Complet.md` et du §8 de `Architecture_Projet.md` ; tous les tests existants (60) toujours verts ; CI verte ; branche `tache/[ID]-[nom-court]` poussée ; `PASSATION.md` à jour dans la branche
-- Fichiers autorisés : ceux de la tâche seulement. Interdit : tout fichier de `.github/protected_paths.txt`
-- À lire d'abord : `AGENTS.md` ; ce fichier ; `src/agent/domain.py` et `src/agent/state_machine.py` (types et états à réutiliser, ne pas redéfinir) ; `docs/specs/Architecture_Projet.md` §3bis, §5, §8, §10
-- Préalables : `main` à jour avec la PR 1 fusionnée ; `.venv/bin/python -m pytest -q` → 60 passed
+- Tâche : PR 2 — D07 (`docs/specs/Features_Complet.md`), bornes décidées par le fondateur (I46, I47) :
+  - n° 40 `src/models/risk_bands.py` : une fonction qui rend `"low"`, `"medium"` ou `"high"` pour un score, avec les bornes **reçues en paramètre** (jamais lues dans la configuration ni écrites en dur) : low si score < borne medium ; medium si borne medium ≤ score < borne high ; high si score ≥ borne high. Refus clair (exception nommée) si les bornes sont absentes (`None`), mal ordonnées (il faut 0 < medium < high < 1) ou si le score n'est pas dans [0, 1].
+  - n° 40bis `scripts/set_risk_band_bounds.py` : lit `model_metadata.json` et `threshold_analysis.csv` (chemins : `paths.model_metadata`, `paths.metrics_dir` de `configs/settings.yaml`, via `src/config.py`) ; borne medium = `threshold` des métadonnées ; borne high = colonne `threshold` de la ligne `capacity_per_day == 200` ; vérifie que la ligne 300 a le même seuil que les métadonnées (sinon refus : fichiers incohérents) ; écrit `risk_band_bounds` dans `model_metadata.json` sans toucher aux autres clés ; ne réentraîne pas, n'ouvre pas le test. Lancé ensuite par le fondateur : `.venv/bin/python -m scripts.set_risk_band_bounds`.
+  - n° 41 `tests/test_risk_bands.py` : chaque bande ; les bornes exactes (score = borne medium → medium ; score = borne high → high) ; bornes `None` / mal ordonnées / score hors [0, 1] refusés ; le script sur des fichiers temporaires (aucun vrai fichier de `artifacts/`).
+- Valeurs attendues après le script (preuve, I46) : medium = 0,5492405919533623 ; high = 0,8516238554349536.
+- Critère de fin : tests ci-dessus verts ; les 60 tests existants toujours verts ; CI verte ; branche `tache/D07-bandes-risque` poussée ; `PASSATION.md` à jour dans la branche.
+- Fichiers autorisés : n° 40, 40bis, 41 seulement (+ `PASSATION.md`). Interdit : tout fichier de `.github/protected_paths.txt` (dont `src/models/model_io.py`, `src/train.py`, `configs/settings.yaml`) ; tout fichier de `artifacts/`.
+- À lire d'abord : `AGENTS.md` ; ce fichier ; `docs/specs/Architecture_Projet.md` §1.2, §5, §8 (lignes n° 40, 40bis, 41), D-12 ; `docs/specs/Features_Complet.md` D07 ; `src/models/model_io.py` (lecture des métadonnées) ; `src/config.py` (chemins) ; `artifacts/metrics/threshold_analysis.csv`.
+- Préalables : `main` à jour (`git pull`) ; `.venv/bin/python -m pytest -q` → 60 passed.
 
 ## 8. JOURNAL DES PASSAGES — ajout seul
 | Date | Qui (outil, modèle si connu) | Mode | Ce qui a été fait | Commit / pull request | Statut laissé |
