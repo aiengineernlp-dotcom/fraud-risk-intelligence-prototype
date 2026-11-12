@@ -5,7 +5,7 @@ Responsibility : Prove that state_machine.py accepts the normal path and every t
                  with InvalidTransitionError, and never lets a case leave a terminal state
 Never does     : Touch the database, the audit log or the LLM (the audit event of a refusal is
                  tested with the orchestrator, PR 3 / PR 10)
-Reference      : Architecture_Projet.md v1.1 — section 3bis, section 8 (n° 43);
+Reference      : Architecture_Projet.md v1.2 — section 3bis, section 8 (n° 43);
                  Features_Complet.md G01, G02; brief §11.3
 """
 

@@ -5,7 +5,7 @@ Responsibility : Hold the explicit state machine of a case: the initial state, t
                  (InvalidTransitionError)
 Never does     : Call the LLM; read or write the database; write audit events (the orchestrator
                  records the refusal); import Streamlit
-Reference      : Architecture_Projet.md v1.1 — section 3bis (transition table), section 5,
+Reference      : Architecture_Projet.md v1.2 — section 3bis (transition table), section 5,
                  section 8 (n° 42); Features_Complet.md G01, G02; brief §11.3
 """
 
