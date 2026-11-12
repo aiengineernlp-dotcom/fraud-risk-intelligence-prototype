@@ -51,6 +51,7 @@
       "Edit(./tests/test_split.py)",
       "Edit(./tests/test_threshold.py)",
       "Edit(./tests/test_models.py)"
-    ]
+    ],
+    "defaultMode": "acceptEdits"
   }
 }
