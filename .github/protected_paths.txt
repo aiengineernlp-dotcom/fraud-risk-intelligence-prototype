@@ -1,0 +1,46 @@
+# Fichiers protégés au J4 (I40) — une pull request qui en modifie un est rouge en CI.
+# Lu depuis la branche de base (main), jamais depuis la pull request.
+# Un dossier se termine par « / ». Seul le fondateur modifie cette liste, directement sur main.
+
+# Ce qui juge l'agent
+.github/
+.claude/
+AGENTS.md
+CLAUDE.md
+docs/specs/
+
+# J1 — configuration (porte G2 pour changer)
+.gitignore
+.env.example
+requirements.txt
+pyproject.toml
+README.md
+configs/settings.yaml
+src/config.py
+src/logging_setup.py
+
+# J2 — données (gelées)
+src/data/schema.py
+src/data/load_paysim.py
+src/data/eda.py
+notebooks/01_eda.ipynb
+data/README.md
+
+# J3 — modèles (gelés)
+src/data/split.py
+src/features/
+src/models/evaluate.py
+src/models/explain.py
+src/models/model_io.py
+src/models/threshold.py
+src/models/train_classical.py
+src/models/train_mlp.py
+src/train.py
+artifacts/metrics/
+
+# Tests existants (jamais supprimés ni affaiblis)
+tests/test_data_schema.py
+tests/test_features.py
+tests/test_split.py
+tests/test_threshold.py
+tests/test_models.py
