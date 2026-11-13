@@ -1,0 +1,69 @@
+# -----------------------------------------------------------------------------
+# SoC layer      : Configuration
+# Responsibility : Words and phrases a draft investigation summary must never contain: allegations
+#                  and actions from the "Avoid" column of brief §12.2, definitive claims (H05),
+#                  label names, and instruction text copied from an untrusted case note
+# Never does     : Hold a secret, a threshold or any other decision value
+# Reference      : Architecture_Projet.md v1.3 — section 8 (n° 49); Features_Complet.md H05;
+#                  brief §10.4, §12.2; PASSATION.md §6, decisions PR 6 (b) and (d)
+# -----------------------------------------------------------------------------
+#
+# How the validator (n° 51) matches these terms:
+#   - case is ignored ("Definitely" = "definitely");
+#   - a term matches only as a whole word or phrase: "block" does not match "blockchain",
+#     "fraud" alone is NOT listed, so "fraud risk score" is allowed;
+#   - checked fields: summary, uncertainties, recommended_review_steps, evidence[].note.
+# Every category must contain at least one term (an empty list would let everything pass).
+
+categories:
+  # Accusations about a person (brief §12.2: "This customer committed fraud.",
+  # "The recipient is a criminal.").
+  allegation:
+    - committed fraud
+    - is fraudulent
+    - fraudster
+    - criminal
+    - guilty
+    - money laundering
+    - laundered
+    - stole
+    - theft
+    - scammer
+
+  # Definitive claims: the model supports review, it never proves anything (brief §10.4).
+  # Founder decision PR 6 (b): "100%" alone is NOT listed, because a factual evidence item
+  # says "100.0% of the origin account balance"; only the certainty phrases are.
+  definitive:
+    - definitely
+    - certainly
+    - undoubtedly
+    - without doubt
+    - proven
+    - proves
+    - confirmed fraud
+    - clearly fraudulent
+    - guaranteed
+    - 100% certain
+    - 100% sure
+
+  # Actions the system never takes (brief §12.2: "Block the account."; G12).
+  action:
+    - block the account
+    - block
+    - freeze
+    - suspend the account
+    - close the account
+    - refund
+    - reverse the transaction
+    - transfer funds
+
+  # Label names must never appear in an agent output (AGENTS.md, project rules).
+  label:
+    - isFraud
+    - isFlaggedFraud
+
+  # Instruction text copied from an untrusted case note (decision PR 6 (d)).
+  injection:
+    - ignore all previous instructions
+    - ignore previous instructions
+    - system override
