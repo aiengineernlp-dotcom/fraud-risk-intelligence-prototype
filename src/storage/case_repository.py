@@ -1,0 +1,190 @@
+"""
+SoC layer      : 2 — Ingestion/Parser
+Responsibility : Read and write cases, their current state and their step results: create a case
+                 once (DuplicateCaseError, D-07), store the state ALREADY DECIDED by the caller,
+                 store a step result once under the key "{case_id}:{step}" (D-07, G10)
+Never does     : Decide a transition (state_machine.py + the orchestrator do); decide a score, band
+                 or validity; build SQL from formatted strings (parameters "?" only); delete a row;
+                 store a label (isFraud, isFlaggedFraud)
+Reference      : Architecture_Projet.md v1.3 — section 1.2, section 5, section 8 (n° 34),
+                 section 10.2, D-07; Features_Complet.md G10; PASSATION.md §6, decisions PR 3
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from src.agent.domain import CaseState
+
+# Decision (e): the labels never enter a case (section 10.2: "jamais l'étiquette").
+LABEL_COLUMNS = frozenset({"isFraud", "isFlaggedFraud"})
+
+
+class DuplicateCaseError(Exception):
+    """Raised when a case_id already exists: a case is created only once (D-07)."""
+
+    def __init__(self, case_id: str) -> None:
+        self.case_id = case_id
+        super().__init__(f"Case already exists: {case_id}")
+
+
+class CaseNotFoundError(Exception):
+    """Raised when the case to update does not exist."""
+
+    def __init__(self, case_id: str) -> None:
+        self.case_id = case_id
+        super().__init__(f"Case not found: {case_id}")
+
+
+class LabelInCaseError(ValueError):
+    """Raised when the transaction of a case contains isFraud or isFlaggedFraud (decision (e))."""
+
+
+@dataclass(frozen=True)
+class CaseRecord:
+    """One row of `cases`, as read back (section 10.2)."""
+
+    case_id: str
+    state: CaseState
+    transaction: dict[str, Any]
+    case_note: str | None
+    priority: str | None
+    reviewer_decision: CaseState | None
+    reviewer_comment: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class StepResult:
+    """One row of `step_results`, as read back (section 10.2)."""
+
+    idempotency_key: str
+    case_id: str
+    step: str
+    result: dict[str, Any]
+    attempts: int
+    created_at: str
+
+
+def utc_now() -> str:
+    """Current time, ISO 8601 UTC with its offset, e.g. 2026-11-13T14:05:09.123456+00:00 (decision (d))."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def idempotency_key(case_id: str, step: str) -> str:
+    """The key of a step result: "{case_id}:{step}" (D-07)."""
+    return f"{case_id}:{step}"
+
+
+def _to_json(value: dict[str, Any]) -> str:
+    # No default=str: an object that is not JSON (e.g. a dataclass) raises TypeError, on purpose.
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def _case_from_row(row: sqlite3.Row) -> CaseRecord:
+    decision = row["reviewer_decision"]
+    return CaseRecord(
+        case_id=row["case_id"],
+        state=CaseState(row["state"]),
+        transaction=json.loads(row["transaction_json"]),
+        case_note=row["case_note"],
+        priority=row["priority"],
+        reviewer_decision=CaseState(decision) if decision is not None else None,
+        reviewer_comment=row["reviewer_comment"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def create_case(
+    conn: sqlite3.Connection,
+    case_id: str,
+    state: CaseState,
+    transaction: dict[str, Any],
+    case_note: str | None = None,
+) -> CaseRecord:
+    """Store a new case with the state given by the caller; refuse a case_id that already exists."""
+    labels = LABEL_COLUMNS & set(transaction)
+    if labels:
+        raise LabelInCaseError(f"Label field(s) not allowed in a case: {sorted(labels)}")
+
+    now = utc_now()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO cases (case_id, state, transaction_json, case_note, created_at,"
+                " updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (case_id, state.value, _to_json(transaction), case_note, now, now),
+            )
+    except sqlite3.IntegrityError:
+        # The same error comes from a duplicate key or from a failed CHECK:
+        # it is a duplicate only if the case is really there.
+        if get_case(conn, case_id) is not None:
+            raise DuplicateCaseError(case_id) from None
+        raise
+    return get_case(conn, case_id)
+
+
+def get_case(conn: sqlite3.Connection, case_id: str) -> CaseRecord | None:
+    """Return the case, or None if it does not exist."""
+    row = conn.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,)).fetchone()
+    return _case_from_row(row) if row is not None else None
+
+
+def update_state(conn: sqlite3.Connection, case_id: str, new_state: CaseState) -> None:
+    """Store the new state. The caller has already checked the transition with state_machine.py."""
+    with conn:
+        cursor = conn.execute(
+            "UPDATE cases SET state = ?, updated_at = ? WHERE case_id = ?",
+            (new_state.value, utc_now(), case_id),
+        )
+    if cursor.rowcount == 0:
+        raise CaseNotFoundError(case_id)
+
+
+def save_step_result(
+    conn: sqlite3.Connection,
+    case_id: str,
+    step: str,
+    result: dict[str, Any],
+    attempts: int,
+) -> tuple[StepResult, bool]:
+    """Store a step result once; return (stored result, created).
+
+    Decision (c), D-07: if the step is already stored, nothing is rewritten and the STORED result
+    is returned with created=False, even if `result` is different.
+    """
+    key = idempotency_key(case_id, step)
+    with conn:
+        # DO NOTHING applies only to an existing key; a failed CHECK or foreign key still raises.
+        cursor = conn.execute(
+            "INSERT INTO step_results (idempotency_key, case_id, step, result_json, attempts,"
+            " created_at) VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (idempotency_key) DO NOTHING",
+            (key, case_id, step, _to_json(result), attempts, utc_now()),
+        )
+    created = cursor.rowcount == 1
+    return get_step_result(conn, case_id, step), created
+
+
+def get_step_result(conn: sqlite3.Connection, case_id: str, step: str) -> StepResult | None:
+    """Return the stored result of this step, or None if the step was never stored."""
+    row = conn.execute(
+        "SELECT * FROM step_results WHERE idempotency_key = ?",
+        (idempotency_key(case_id, step),),
+    ).fetchone()
+    if row is None:
+        return None
+    return StepResult(
+        idempotency_key=row["idempotency_key"],
+        case_id=row["case_id"],
+        step=row["step"],
+        result=json.loads(row["result_json"]),
+        attempts=row["attempts"],
+        created_at=row["created_at"],
+    )

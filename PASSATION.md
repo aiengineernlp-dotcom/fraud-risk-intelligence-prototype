@@ -24,6 +24,7 @@
 - [x] PR 2 fusionnée : pull request #3, merge `0f1846c` ; `scripts.set_risk_band_bounds` lancé par le fondateur (2026-11-13, §7 de la passation précédente)
 - [x] PR 2 — essai du script sur des **copies** de `model_metadata.json` et `threshold_analysis.csv` (dossier temporaire hors dépôt) → `(None, {'medium': 0.5492405919533623, 'high': 0.8516238554349536})` = valeurs I46 ; autres clés identiques (2026-11-13). Aucun fichier de `artifacts/` modifié
 - [x] PR 3 — étape 2 : `src/storage/db.py` (n° 33 : `connect`, `create_tables`, `init_db`, 3 tables §10.2 + 2 déclencheurs), fixture `db_conn` dans `tests/conftest.py`, tests 1 à 8 dans `tests/test_review_and_audit.py` (n° 70) ; `.venv/bin/python -m pytest -q` → 122 passed in 7.24s (2026-11-13 ; 101 anciens + 21 nouveaux)
+- [x] PR 3 — étape 3 : `src/storage/case_repository.py` (n° 34 : `create_case`, `get_case`, `update_state`, `save_step_result` → `(StepResult, created)`, `get_step_result` ; `DuplicateCaseError`, `CaseNotFoundError`, `LabelInCaseError`), tests 9 à 12 (+ étiquettes refusées, contraintes conservées) ; `.venv/bin/python -m pytest -q` → 132 passed in 6.53s (2026-11-13)
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
 - [ ] PR 3 🔒 — n° 33 `db.py`, n° 34 `case_repository.py`, n° 35 `audit_repository.py`, n° 70 `test_review_and_audit.py` (commencé) — en cours sur `tache/G10-stockage-audit`

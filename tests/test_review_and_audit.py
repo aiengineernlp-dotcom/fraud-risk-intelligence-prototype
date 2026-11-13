@@ -15,6 +15,16 @@ import sqlite3
 import pytest
 
 from src.agent.domain import REVIEWER_OUTCOMES, CaseState
+from src.storage.case_repository import (
+    CaseNotFoundError,
+    DuplicateCaseError,
+    LabelInCaseError,
+    create_case,
+    get_case,
+    get_step_result,
+    save_step_result,
+    update_state,
+)
 from src.storage.db import create_tables, init_db
 
 NOW = "2026-11-13T10:00:00.000000+00:00"
@@ -109,3 +119,77 @@ def test_unknown_step_rejected(db_conn):
     _insert_case_raw(db_conn, "CASE-1", "RECEIVED")
     with pytest.raises(sqlite3.IntegrityError):
         _insert_step_raw(db_conn, "CASE-1", "payment", 1)
+
+
+# --- case_repository.py (n° 34) ------------------------------------------------------------------
+
+TRANSACTION = {"type": "TRANSFER", "amount": 181.0, "step": 1}
+
+
+def test_duplicate_submission(db_conn):
+    first = create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION, "note A")
+    with pytest.raises(DuplicateCaseError):
+        create_case(db_conn, "CASE-1", CaseState.SCORED, {"amount": 1.0}, "note B")
+    assert get_case(db_conn, "CASE-1") == first  # the original is untouched
+    assert db_conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 1
+
+
+def test_create_case_round_trip(db_conn):
+    case = create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION, "note")
+    assert case.state is CaseState.RECEIVED
+    assert case.transaction == TRANSACTION
+    assert case.case_note == "note"
+    assert case.reviewer_decision is None
+    assert case.created_at == case.updated_at
+    assert case.created_at.endswith("+00:00")
+
+
+@pytest.mark.parametrize("label", ["isFraud", "isFlaggedFraud"])
+def test_label_in_case_refused(db_conn, label):
+    with pytest.raises(LabelInCaseError):
+        create_case(db_conn, "CASE-1", CaseState.RECEIVED, {**TRANSACTION, label: 0})
+    assert get_case(db_conn, "CASE-1") is None
+
+
+def test_get_unknown_case_returns_none(db_conn):
+    assert get_case(db_conn, "UNKNOWN") is None
+
+
+def test_update_state_records_given_state(db_conn):
+    before = create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    update_state(db_conn, "CASE-1", CaseState.SCORED)
+    after = get_case(db_conn, "CASE-1")
+    assert after.state is CaseState.SCORED
+    # Same ISO format, so text order = time order; ">=" because two calls can share a microsecond.
+    assert after.updated_at >= before.updated_at
+    assert after.created_at == before.created_at
+
+
+def test_update_state_unknown_case(db_conn):
+    with pytest.raises(CaseNotFoundError):
+        update_state(db_conn, "UNKNOWN", CaseState.SCORED)
+
+
+def test_step_result_idempotent(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    first, created_first = save_step_result(db_conn, "CASE-1", "score", {"score": 0.91}, 1)
+    second, created_second = save_step_result(db_conn, "CASE-1", "score", {"score": 0.12}, 3)
+    assert created_first is True
+    assert created_second is False
+    assert second == first  # the stored result is returned, the new one is ignored (D-07)
+    assert second.result == {"score": 0.91}
+    assert second.idempotency_key == "CASE-1:score"
+    assert db_conn.execute("SELECT COUNT(*) FROM step_results").fetchone()[0] == 1
+
+
+def test_get_unknown_step_returns_none(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    assert get_step_result(db_conn, "CASE-1", "draft") is None
+
+
+def test_step_result_constraints_still_apply(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    with pytest.raises(sqlite3.IntegrityError):
+        save_step_result(db_conn, "CASE-1", "score", {}, 0)  # attempts >= 1
+    with pytest.raises(sqlite3.IntegrityError):
+        save_step_result(db_conn, "UNKNOWN", "score", {}, 1)  # foreign key
