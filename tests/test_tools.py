@@ -19,7 +19,7 @@ import re
 import numpy as np
 import pytest
 
-from src.agent.domain import CaseState, EvidenceItem
+from src.agent.domain import AuditEvent, CaseState, EvidenceItem
 from src.agent.tools.errors import (
     DuplicateSubmissionError,
     ToolError,
@@ -27,6 +27,9 @@ from src.agent.tools.errors import (
     ToolUnavailableError,
 )
 from src.agent.tools.intake_case import intake_case
+from src.agent.tools.retrieve_case_evidence import retrieve_case_evidence
+from src.agent.tools.write_audit_event import write_audit_event
+from src.audit.audit_repository import list_events
 from src.agent.tools.score_transaction import ScoringModel, load_scoring_model, score_transaction
 from src.data.case_input import FEATURE_FIELDS, CaseInput, CaseInputError, parse_case_input
 from src.models.risk_bands import risk_band
@@ -531,3 +534,95 @@ def test_scoring_model_is_read_only(scoring_model):
     with pytest.raises(AttributeError):
         scoring_model.threshold = 0.1  # frozen dataclass
     assert isinstance(scoring_model, ScoringModel)
+
+
+# --- n° 46 retrieve_case_evidence.py --------------------------------------------------------------
+
+def test_retrieve_known_case_returns_evidence(evidence_store):
+    assert retrieve_case_evidence(evidence_store, "CASE-0001") == [
+        EvidenceItem(source_id="EV-0001", text="Transaction type: TRANSFER."),
+        EvidenceItem(source_id="EV-0002", text="Simulated hour of day: 1 (step 1)."),
+    ]
+
+
+@pytest.mark.parametrize("case_id", ["CASE-9999", "CASE-0003", "not-a-case", "", None, 42])
+def test_retrieve_unknown_case_returns_empty(evidence_store, case_id):
+    """G05: an unknown case gives an explicit empty list, never an unhandled exception."""
+    assert retrieve_case_evidence(evidence_store, case_id) == []
+
+
+@pytest.mark.parametrize("content", [None, "{not json", '{"evidence": "nope"}'])
+def test_retrieve_broken_store_unavailable(tmp_path, content):
+    """Decision (b), Q-17: a missing or broken store is a failure, never 'no evidence'."""
+    path = tmp_path / "evidence_store.json"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    with pytest.raises(ToolUnavailableError):
+        retrieve_case_evidence(path, "CASE-0001")
+
+
+# --- n° 47 write_audit_event.py -------------------------------------------------------------------
+
+def _event(**changes):
+    """A valid audit event for CASE-0001 (invented); `changes` overrides fields."""
+    fields = {
+        "case_id": "CASE-0001",
+        "timestamp": "2026-11-13T10:00:00.000000+00:00",
+        "actor": "tool:intake_case",
+        "action": "transition",
+        "result": "ok",
+        "state_from": None,
+        "state_to": CaseState.RECEIVED,
+        "details": {"evidence_count": 0},
+    }
+    fields.update(changes)
+    return AuditEvent(**fields)
+
+
+def test_write_audit_event_confirmed(db_conn):
+    intake_case(db_conn, _valid_input())
+    event_id = write_audit_event(db_conn, _event())
+    assert isinstance(event_id, int)
+    (stored,) = list_events(db_conn, "CASE-0001")
+    assert stored.event_id == event_id  # the returned id is really in the audit table
+    assert stored.event == _event()  # read back field for field
+
+
+@pytest.mark.parametrize("changes", [
+    {"details": {"api_key": "x"}},
+    {"details": {"nested": {"password": "x"}}},
+    {"timestamp": "2026-11-13T10:00:00+02:00"},
+    {"details": {"bad": object()}},
+])
+def test_write_audit_event_refused_writes_nothing(db_conn, changes):
+    intake_case(db_conn, _valid_input())
+    with pytest.raises(ToolInputError):
+        write_audit_event(db_conn, _event(**changes))
+    assert list_events(db_conn, "CASE-0001") == []
+
+
+def test_write_audit_unknown_case_rejected(db_conn):
+    with pytest.raises(ToolInputError):
+        write_audit_event(db_conn, _event(case_id="CASE-0404"))
+
+
+def test_write_audit_not_an_event_rejected(db_conn):
+    with pytest.raises(ToolInputError):
+        write_audit_event(db_conn, {"case_id": "CASE-0001"})
+
+
+def test_write_audit_database_failure_is_unavailable(db_conn):
+    intake_case(db_conn, _valid_input())
+    db_conn.close()
+    with pytest.raises(ToolUnavailableError):
+        write_audit_event(db_conn, _event())
+
+
+def test_write_audit_log_line_has_no_details(db_conn, caplog):
+    intake_case(db_conn, _valid_input())
+    with caplog.at_level("INFO", logger="src.agent.tools.write_audit_event"):
+        event_id = write_audit_event(db_conn, _event(details={"reviewer_comment": "VISIBLE-TEXT"}))
+    (record,) = caplog.records
+    line = record.getMessage()
+    assert f"audit event {event_id} written" in line and "CASE-0001" in line
+    assert "VISIBLE-TEXT" not in line and "reviewer_comment" not in line
