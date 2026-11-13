@@ -6,11 +6,11 @@
 
 ## 1. OÙ ON EN EST
 - Phase : Phase 1 – J4 Agent et LLM, **vibe coding contrôlé** (AS-15 ; I35, I39) — agent de code : Claude Code, en local ; Temps 2 de chaque pull request dans le chat « Capstone · M4 · Phase 1 – J4 agent et LLM »
-- Arrêtée exactement à : PR 2 (D07) **codée** sur la branche `tache/D07-bandes-risque` (commit `7309ce3`) : n° 40, 40bis, 41 ; 101 passed en local ; **à pousser, puis pull request à ouvrir par le fondateur** ; le script n° 40bis n'a **pas** été lancé sur le vrai `model_metadata.json` (c'est le fondateur qui le lance) ; n° 33 à 39 et 44 à 65 à faire
-- Branche / pull request : `tache/D07-bandes-risque` (depuis `main` à `ba74cbb`) ; pas encore de pull request (PR #1 d'essai fermée sans fusion ; PR #2 fusionnée)
+- Arrêtée exactement à : PR 2 (D07) **fusionnée** (pull request #3, merge `0f1846c`) ; bornes des bandes écrites par le fondateur dans le vrai `model_metadata.json` (local) ; PR 3 🔒 (n° 33, 34, 35, 70) **en cours** sur `tache/G10-stockage-audit` — plan validé (GO 2026-11-13, décisions au §6) ; n° 36 à 39 et 44 à 65 à faire
+- Branche / pull request : `tache/G10-stockage-audit` (depuis `main` à `b745cf1`) ; pas encore de pull request (PR #2 et #3 fusionnées)
 - Décisions J3 à ne pas rediscuter : découpage stratifié 70/15/15, graine 42 dans `configs/settings.yaml` (I34) ; 12 variables (I36) ; Random Forest choisie sur la PR-AUC de validation (I09) ; seuil 0,5492 pour 300 cas/jour, marge 0,05 (I08) ; permutation seule (I10) ; seuil et métadonnées seulement dans `model_metadata.json` (I20)
 - Décisions J4 : `main` protégée par garde-fous locaux + CI (compte GitHub Free, I40) ; `CLAUDE.md` = `@AGENTS.md` (I41) ; points de contrôle : J4 gelé ven. 13 nov. 23 h 00, J5 gelé sam. 14 nov. 15 h 00, J6 prêt sam. 14 nov. 23 h 59 ; remise dim. 15 nov. 10 h 45 (I42)
-- Ouvert : `risk_band_bounds: null` dans le vrai `model_metadata.json` → le fondateur lance `.venv/bin/python -m scripts.set_risk_band_bounds` après la fusion de la PR 2 (I47) ; Temps 2 🟡 à reformuler avant l'oral : 8 du J3 + B162 (ouverture J4) + B163 à B166 (PR 1)
+- Ouvert : Temps 2 🟡 à reformuler avant l'oral : 8 du J3 + B162 (ouverture J4) + B163 à B166 (PR 1)
 
 ## 2. FAIT — AVEC PREUVE
 - [x] J1, J2, J3 FROZEN — tags `vj1-cadrage-frozen`, `vj2-donnees-frozen`, `vj3-modeles-frozen` (poussés ; `git ls-remote` → `600f8884…`, 2026-11-12)
@@ -21,11 +21,11 @@
 - [x] PR 1 — décision I45 (Q-06) : FAILED ajouté aux transitions de VALIDATED et HUMAN_REVIEW (15 transitions autorisées) ; `.venv/bin/python -m pytest -q` → 60 passed in 8.50s (2026-11-12)
 - [x] PR 1 fusionnée : pull request #2, CI `tests` ✅ + `protected-paths` ✅, Temps 2 fait (B163 à B166, 🟡), merge `157e689` (2026-11-12)
 - [x] PR 2 — D07 : `src/models/risk_bands.py` (n° 40 : `RiskBandError(ValueError)`, `check_bounds`, `risk_band`), `scripts/set_risk_band_bounds.py` (n° 40bis), `tests/test_risk_bands.py` (n° 41, 41 tests dont `math.nextafter` sous chaque borne) — commit `7309ce3` ; `.venv/bin/python -m pytest -q` → 101 passed in 7.52s (2026-11-13 ; 60 anciens + 41 nouveaux)
+- [x] PR 2 fusionnée : pull request #3, merge `0f1846c` ; `scripts.set_risk_band_bounds` lancé par le fondateur (2026-11-13, §7 de la passation précédente)
 - [x] PR 2 — essai du script sur des **copies** de `model_metadata.json` et `threshold_analysis.csv` (dossier temporaire hors dépôt) → `(None, {'medium': 0.5492405919533623, 'high': 0.8516238554349536})` = valeurs I46 ; autres clés identiques (2026-11-13). Aucun fichier de `artifacts/` modifié
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
-- [ ] PR 2 — D07 : pousser `tache/D07-bandes-risque` ; pull request (fondateur) ; CI verte ; Temps 2 ; fusion ; puis le fondateur lance `.venv/bin/python -m scripts.set_risk_band_bounds` (affiche l'ancienne et la nouvelle valeur)
-- [ ] PR 3 🔒 — n° 33 `db.py`, n° 34 `case_repository.py`, n° 35 `audit_repository.py`
+- [ ] PR 3 🔒 — n° 33 `db.py`, n° 34 `case_repository.py`, n° 35 `audit_repository.py`, n° 70 `test_review_and_audit.py` (commencé) — en cours sur `tache/G10-stockage-audit`
 - [ ] PR 4 — G08 : n° 36, 37, 38, 39
 - [ ] PR 5 — G04, G05, G07 : n° 44 à 47, n° 48 (+ petit pipeline de test dans `tests/conftest.py`)
 - [ ] PR 6 — H01–H04 : n° 49 à 53
@@ -66,6 +66,9 @@
 - Q-08 (PR 2, Q2 du plan) — **Réponse du fondateur (2026-11-13) : gardée** ; dépendance ajoutée au registre (`Architecture_Projet.md` §8, n° 40bis).  Dépendance : `scripts/set_risk_band_bounds.py` (n° 40bis, couche Entraînement) importe `check_bounds` de `src/models/risk_bands.py` (n° 40, couche 3), pour appliquer la même règle (0 < medium < high < 1) que l'agent. Le registre §8 ne liste pas cette dépendance pour le n° 40bis → à ajouter dans `docs/specs/Architecture_Projet.md` par le fondateur s'il la garde
 - Q-09 (PR 2) — **Réponse : d'accord** (décisions, pas réglages).  Les capacités 200 et 300 sont des constantes nommées dans le script (`HIGH_BOUND_CAPACITY`, `THRESHOLD_CAPACITY`), issues des décisions I46 et I08, et pas des réglages : `configs/settings.yaml` a `review_capacity_per_day` (300), que le script n'utilise pas. Le script refuse si la ligne 300 ne porte pas le seuil des métadonnées. À confirmer
 - Q-10 (PR 2) — **Réponse : d'accord.**  Le script lève `BoundsSourceError` (nouvelle exception, non nommée dans le plan) pour les fichiers absents ou incohérents, et `RiskBandError` (de `check_bounds`) pour les bornes mal ordonnées ; `main()` les affiche sur stderr et rend 1
+- Décisions PR 3 (GO du fondateur, 2026-11-13) : 11 états **en dur** dans le SQL de `db.py` + test paramétré sur `CaseState` (pas de dépendance `db.py` → `domain.py`, registre §8 respecté) ; `CHECK` sur `step` (`score`, `evidence`, `draft`, `validation`, §10.2) ; (a) 2 déclencheurs refusant `UPDATE` / `DELETE` sur `audit_events` ; (b) clé de `details` ressemblant à un secret → `SecretInAuditError` (morceaux `secret`, `password`, `passwd`, `token`, `apikey` ; `api` suivi de `key` ; clé exactement `key` ; découpage sur `_` et `-`, minuscules, dictionnaires imbriqués) ; (c) résultat d'étape existant rendu tel quel avec `created=False` (D-07) ; (d) ISO 8601 UTC avec décalage, horodatage d'audit non UTC refusé, ordre par `event_id` ; (e) `create_case` refuse `isFraud` / `isFlaggedFraud` dans la transaction
+- Q-11 (PR 3, risque 2) Schéma non migré : `CREATE TABLE IF NOT EXISTS` ne modifie pas une base existante. Si le schéma change plus tard, un `data/runtime/capstone.db` déjà créé garde l'ancien schéma sans erreur. Aucune base n'existe aujourd'hui. À décider : supprimer la base locale (fondateur) à chaque changement de schéma, ou une vérification de version
+- Q-12 (PR 3, risque 7) Threads de Streamlit : `sqlite3` refuse par défaut d'utiliser une connexion dans un autre thread que celui qui l'a ouverte (`check_same_thread`). Non traité dans la PR 3 (les dépôts reçoivent la connexion de l'appelant). À trancher à la PR 10 (orchestrateur) ou au J5 : une connexion par appel, ou `check_same_thread=False` avec verrou
 - Q-04 `.claude/settings.local.json` (créé par Claude Code) à ignorer dans `.gitignore` (fichier gelé n° 01 : porte G2, décision du fondateur)
 
 ## 7. PROCHAINE SÉANCE — LA TÂCHE DU PROCHAIN
