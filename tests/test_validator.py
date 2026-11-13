@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 
 from src.agent.domain import EvidenceItem, ScoreResult
+from src.agent.tools.errors import ToolInputError, ToolUnavailableError
+from src.agent.tools.validate_investigation_json import TOOL_EFFECT, validate_investigation_json
 from src.agent.validators.investigation_schema import REQUIRED_FIELDS
 from src.agent.validators.investigation_validator import (
     MODEL_SCORE_ABS_TOLERANCE,
@@ -265,3 +267,42 @@ def test_empty_terms_category_refused(tmp_path):
 def test_missing_terms_file_refused(tmp_path):
     with pytest.raises(ProhibitedTermsError):
         load_prohibited_terms(tmp_path / "absent.yaml")
+
+
+# --- The validation tool (n° 52) -----------------------------------------------------------
+
+
+def test_tool_is_read_only():
+    assert TOOL_EFFECT == "read_only"
+
+
+def test_tool_accepts_a_valid_draft():
+    result = validate_investigation_json(json.dumps(valid_draft()), OFFICIAL, CASE_ID, EVIDENCE, TERMS_PATH)
+    assert result.passed is True, result.reasons
+
+
+@pytest.mark.parametrize("raw", ["not json", 42, None])
+def test_tool_returns_a_rejection_not_an_exception(raw):
+    result = validate_investigation_json(raw, OFFICIAL, CASE_ID, EVIDENCE, TERMS_PATH)
+    assert result.passed is False and result.reasons
+
+
+def test_tool_missing_terms_file_is_unavailable(tmp_path):
+    with pytest.raises(ToolUnavailableError):
+        validate_investigation_json(
+            json.dumps(valid_draft()), OFFICIAL, CASE_ID, EVIDENCE, tmp_path / "absent.yaml"
+        )
+
+
+@pytest.mark.parametrize(
+    "official, case_id, evidence",
+    [
+        ({"score": 0.8}, CASE_ID, EVIDENCE),  # not a ScoreResult
+        (OFFICIAL, "", EVIDENCE),  # no case_id
+        (OFFICIAL, CASE_ID, None),  # no evidence list
+        (OFFICIAL, CASE_ID, [{"source_id": "EV-0001", "text": "x"}]),  # not EvidenceItem
+    ],
+)
+def test_tool_bad_arguments_are_input_errors(official, case_id, evidence):
+    with pytest.raises(ToolInputError):
+        validate_investigation_json(json.dumps(valid_draft()), official, case_id, evidence, TERMS_PATH)
