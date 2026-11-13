@@ -13,6 +13,7 @@ Reference      : Architecture_Projet.md v1.3 — section 3 (Flux 2a, 2b), sectio
 from __future__ import annotations
 
 import ast
+import math
 from pathlib import Path
 
 import pytest
@@ -30,11 +31,21 @@ from src.agent.retry import (
     AttemptRecord,
     run_with_retries,
 )
+from src.agent.routing_policy import (
+    PRIORITIES,
+    PRIORITY_HIGH,
+    PRIORITY_NORMAL,
+    REASON_HIGH_BAND,
+    REASON_NEAR_THRESHOLD,
+    REASON_NO_EVIDENCE,
+    route_case,
+)
 from src.agent.tools.errors import DuplicateSubmissionError, ToolInputError, ToolUnavailableError
 from src.agent.tools.validate_investigation_json import validate_investigation_json
 from src.agent.tools.write_audit_event import write_audit_event
 from src.audit.audit_repository import list_events
 from src.config import RetrySettings
+from src.models.risk_bands import risk_band
 from src.storage.case_repository import create_case, utc_now
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -333,3 +344,113 @@ def test_retry_has_no_thread_nor_sleep():
     called = {node.func.attr for node in ast.walk(tree)
               if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
     assert "sleep" not in called
+
+
+# --- routing_policy.py (n° 54) -----------------------------------------------------------------
+
+ROUTING_SOURCE = REPO_ROOT / "src" / "agent" / "routing_policy.py"
+EVIDENCE = [EvidenceItem(source_id="EV-0001", text="Invented evidence for the test.")]
+
+
+@pytest.fixture
+def margin() -> float:
+    """routing.near_threshold_margin from settings.yaml (I08), never a value written in the test."""
+    return float(_settings_yaml()["routing"]["near_threshold_margin"])
+
+
+@pytest.fixture
+def test_model_facts(scoring_model_files) -> tuple[float, dict]:
+    """Threshold and band bounds of the small test model (invented for the tests, conftest.py)."""
+    written = scoring_model_files["written"]
+    return written["threshold"], written["risk_band_bounds"]
+
+
+def _score(value: float, threshold: float, bounds: dict) -> ScoreResult:
+    # The band is computed by the real risk_bands.py, as score_transaction.py does.
+    return ScoreResult(score=value, threshold=threshold, risk_band=risk_band(value, bounds),
+                       model_version="test_logistic@2026-11-13")
+
+
+@pytest.mark.parametrize("case", [
+    "high_band",
+    "at_lower_bound",
+    "just_below_lower_bound",
+    "just_below_threshold",
+    "at_threshold_medium_band",
+    "low_band_far_from_threshold",
+])
+def test_review_priority(case, margin, test_model_facts):
+    """Registry test: high band or score close to the threshold -> "high"; otherwise "normal"."""
+    threshold, bounds = test_model_facts
+    lower = threshold - margin
+    value, expected_priority, expected_reasons = {
+        "high_band": (bounds["high"], PRIORITY_HIGH, (REASON_HIGH_BAND,)),
+        "at_lower_bound": (lower, PRIORITY_HIGH, (REASON_NEAR_THRESHOLD,)),
+        "just_below_lower_bound": (math.nextafter(lower, 0.0), PRIORITY_NORMAL, ()),
+        "just_below_threshold": (math.nextafter(threshold, 0.0), PRIORITY_HIGH, (REASON_NEAR_THRESHOLD,)),
+        "at_threshold_medium_band": (threshold, PRIORITY_NORMAL, ()),
+        "low_band_far_from_threshold": (lower / 2, PRIORITY_NORMAL, ()),
+    }[case]
+    decision = route_case(_score(value, threshold, bounds), EVIDENCE, margin)
+    assert decision.priority == expected_priority
+    assert decision.reasons == expected_reasons
+    assert decision.request_information is False
+    assert decision.priority in PRIORITIES
+
+
+def test_review_priority_missing_evidence(margin, test_model_facts):
+    threshold, bounds = test_model_facts
+    decision = route_case(_score(threshold, threshold, bounds), [], margin)
+    assert decision.priority == PRIORITY_NORMAL
+    assert decision.request_information is True
+    assert decision.reasons == (REASON_NO_EVIDENCE,)
+
+
+def test_review_priority_high_and_missing_evidence(margin, test_model_facts):
+    """Decision PR 9 (a): a case can be "high" AND need more information."""
+    threshold, bounds = test_model_facts
+    decision = route_case(_score(bounds["high"], threshold, bounds), [], margin)
+    assert decision.priority == PRIORITY_HIGH
+    assert decision.request_information is True
+    assert decision.reasons == (REASON_HIGH_BAND, REASON_NO_EVIDENCE)
+
+
+def test_routing_uses_the_score_threshold(margin):
+    """The threshold comes from ScoreResult (model_metadata.json, I20), never from the code."""
+    # Same score and band, two invented thresholds: only the threshold changes the priority.
+    value = 0.28
+    near = ScoreResult(score=value, threshold=value + margin / 2, risk_band="low", model_version="v")
+    far = ScoreResult(score=value, threshold=value + 2 * margin, risk_band="low", model_version="v")
+    assert route_case(near, EVIDENCE, margin).priority == PRIORITY_HIGH
+    assert route_case(far, EVIDENCE, margin).priority == PRIORITY_NORMAL
+
+
+@pytest.mark.parametrize("bad", ["no_margin", "negative_margin", "nan_margin", "nan_score", "inf_threshold"])
+def test_routing_refuses_missing_margin_or_non_finite(bad, margin):
+    score = ScoreResult(score=0.2, threshold=0.3, risk_band="low", model_version="v")
+    used_margin = margin
+    if bad == "no_margin":
+        used_margin = None
+    elif bad == "negative_margin":
+        used_margin = -margin
+    elif bad == "nan_margin":
+        used_margin = float("nan")
+    elif bad == "nan_score":
+        score = ScoreResult(score=float("nan"), threshold=0.3, risk_band="low", model_version="v")
+    else:
+        score = ScoreResult(score=0.2, threshold=float("inf"), risk_band="low", model_version="v")
+    with pytest.raises(ValueError):
+        route_case(score, EVIDENCE, used_margin)
+
+
+def test_routing_policy_layer_rules():
+    """Layer 3 (Architecture §5): no LLM, no Streamlit, no config read (the margin is passed in)."""
+    tree = ast.parse(ROUTING_SOURCE.read_text(encoding="utf-8"))
+    modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    forbidden = ("src.agent.llm", "openai", "streamlit", "src.config", "os", "yaml")
+    assert not [m for m in modules if any(m == f or m.startswith(f + ".") for f in forbidden)]
