@@ -30,6 +30,8 @@ from src.agent.tools.errors import (
     ToolUnavailableError,
 )
 from src.agent.tools.intake_case import intake_case
+from src.agent.tools import update_case
+from src.agent.state_machine import InvalidTransitionError
 from src.agent.tools.retrieve_case_evidence import retrieve_case_evidence
 from src.agent.tools.write_audit_event import write_audit_event
 from src.audit.audit_repository import list_events
@@ -709,3 +711,91 @@ def test_g12_checks_catch_a_planted_tool():
     )
     assert _financial_names(source) == ["freeze_account", "PaymentClient"]
     assert _forbidden_imports(source) == ["requests", "urllib"]
+
+
+# --- update_case: the only tool that changes a stored case (Q-28, decision PR 10 (a)) -------------
+def test_update_case_declares_writes_case():
+    assert update_case.TOOL_EFFECT == "writes_case"
+
+
+def test_update_case_applies_an_allowed_transition(db_conn):
+    intake_case(db_conn, _valid_input())
+    previous = update_case.transition_case(db_conn, "CASE-0001", CaseState.SCORED)
+    assert previous is CaseState.RECEIVED
+    assert update_case.get_case(db_conn, "CASE-0001").state is CaseState.SCORED
+
+
+def test_update_case_refuses_invalid_transition_without_writing(db_conn):
+    """G02: the state machine is asked BEFORE the write; a refused jump leaves the case unchanged."""
+    intake_case(db_conn, _valid_input())
+    before = update_case.get_case(db_conn, "CASE-0001")
+    with pytest.raises(InvalidTransitionError):
+        update_case.transition_case(db_conn, "CASE-0001", CaseState.VALIDATED)
+    after = update_case.get_case(db_conn, "CASE-0001")
+    assert after.state is CaseState.RECEIVED and after.updated_at == before.updated_at
+
+
+def test_update_case_refuses_leaving_a_terminal_state(db_conn):
+    intake_case(db_conn, _valid_input())
+    update_case.transition_case(db_conn, "CASE-0001", CaseState.FAILED)
+    with pytest.raises(InvalidTransitionError):
+        update_case.transition_case(db_conn, "CASE-0001", CaseState.SCORED)
+    assert update_case.get_case(db_conn, "CASE-0001").state is CaseState.FAILED
+
+
+@pytest.mark.parametrize("target", ["SCORED", None])
+def test_update_case_target_must_be_a_state(db_conn, target):
+    intake_case(db_conn, _valid_input())
+    with pytest.raises(ToolInputError):
+        update_case.transition_case(db_conn, "CASE-0001", target)
+
+
+def test_update_case_unknown_case(db_conn):
+    with pytest.raises(ToolInputError):
+        update_case.transition_case(db_conn, "CASE-9999", CaseState.SCORED)
+    with pytest.raises(ToolInputError):
+        update_case.set_case_priority(db_conn, "CASE-9999", "high")
+    with pytest.raises(ToolInputError):
+        update_case.save_step(db_conn, "CASE-9999", "score", {"score": 0.1}, 1)
+    assert update_case.get_case(db_conn, "CASE-9999") is None
+
+
+def test_update_case_save_step_is_idempotent(db_conn):
+    """G10, D-07: a second save of the same step returns the FIRST result, created=False."""
+    intake_case(db_conn, _valid_input())
+    first, created = update_case.save_step(db_conn, "CASE-0001", "score", {"score": 0.1}, 1)
+    again, created_again = update_case.save_step(db_conn, "CASE-0001", "score", {"score": 0.9}, 2)
+    assert created is True and created_again is False
+    assert again.result == {"score": 0.1} and again.attempts == 1
+    assert update_case.get_step(db_conn, "CASE-0001", "score") == first
+
+
+@pytest.mark.parametrize("step, attempts", [("payment", 1), ("score", 0)])
+def test_update_case_save_step_refuses_bad_values(db_conn, step, attempts):
+    intake_case(db_conn, _valid_input())
+    with pytest.raises(ToolInputError):
+        update_case.save_step(db_conn, "CASE-0001", step, {"x": 1}, attempts)
+    assert update_case.get_step(db_conn, "CASE-0001", step) is None
+
+
+@pytest.mark.parametrize("priority", ["urgent", "HIGH", None, 1])
+def test_update_case_refuses_unknown_priority(db_conn, priority):
+    intake_case(db_conn, _valid_input())
+    with pytest.raises(ToolInputError):
+        update_case.set_case_priority(db_conn, "CASE-0001", priority)
+    assert update_case.get_case(db_conn, "CASE-0001").priority is None
+
+
+def test_update_case_sets_priority(db_conn):
+    intake_case(db_conn, _valid_input())
+    update_case.set_case_priority(db_conn, "CASE-0001", "high")
+    assert update_case.get_case(db_conn, "CASE-0001").priority == "high"
+
+
+def test_update_case_database_down(db_conn):
+    intake_case(db_conn, _valid_input())
+    db_conn.close()
+    with pytest.raises(ToolUnavailableError):
+        update_case.get_case(db_conn, "CASE-0001")
+    with pytest.raises(ToolUnavailableError):
+        update_case.set_case_priority(db_conn, "CASE-0001", "high")
