@@ -58,3 +58,28 @@ def db_conn(tmp_path: Path):
     conn = init_db(tmp_path / "test_capstone.db")
     yield conn
     conn.close()
+
+
+@pytest.fixture
+def small_paysim_csv(tmp_path: Path) -> Path:
+    """CSV inventé de 200 lignes, sans hasard, conforme au contrat (pour scripts/build_demo_cases.py).
+
+    1 ligne sur 10 a isFraud = 1 : le découpage stratifié trouve une fraude dans chaque partie.
+    Les identifiants inventés (C + 7 chiffres) servent à vérifier qu'ils ne sortent jamais.
+    """
+    types = ["TRANSFER", "CASH_OUT", "PAYMENT", "CASH_IN", "DEBIT"]
+    rows = []
+    for i in range(200):
+        amount = 100.0 + 37.5 * i
+        old_orig = 0.0 if i % 7 == 0 else amount * (1 + (i % 3))
+        new_orig = 0.0 if i % 4 == 0 else max(old_orig - amount, 0.0)
+        old_dest = 0.0 if i % 5 == 0 else 1000.0 + i
+        new_dest = 0.0 if i % 5 == 0 else old_dest + amount
+        rows.append([
+            1 + i % 50, types[i % 5], amount, f"C{1000000 + i}",
+            old_orig, new_orig, f"C{2000000 + i}", old_dest, new_dest,
+            1 if i % 10 == 0 else 0, 0,
+        ])
+    path = tmp_path / "paysim_small.csv"
+    pd.DataFrame(rows, columns=_COLUMNS).to_csv(path, index=False)
+    return path
