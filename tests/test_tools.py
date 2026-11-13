@@ -13,8 +13,11 @@ Reference      : Architecture_Projet.md v1.3 — section 8 (n° 48, tests of n°
 
 from __future__ import annotations
 
+import ast
+import importlib
 import json
 import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -626,3 +629,83 @@ def test_write_audit_log_line_has_no_details(db_conn, caplog):
     line = record.getMessage()
     assert f"audit event {event_id} written" in line and "CASE-0001" in line
     assert "VISIBLE-TEXT" not in line and "reviewer_comment" not in line
+
+
+# --- G12 : no tool can take a financial action (decision (d)) -------------------------------------
+# Every file in src/agent/tools/ is a tool, except errors.py (shared errors). A new tool file is
+# checked automatically. The code is read with `ast`, never run, for the name and import checks.
+TOOLS_DIR = Path(__file__).resolve().parent.parent / "src" / "agent" / "tools"
+NOT_TOOLS = {"errors.py", "__init__.py"}
+ALLOWED_EFFECTS = {"read_only", "writes_case", "writes_audit"}
+FINANCIAL_WORDS = (
+    "pay", "payment", "refund", "transfer_funds", "block", "freeze", "wire", "payout", "charge",
+)
+FORBIDDEN_IMPORTS = {"requests", "httpx", "urllib", "socket", "subprocess", "openai"}
+KNOWN_TOOLS = {
+    "intake_case.py", "score_transaction.py", "retrieve_case_evidence.py", "write_audit_event.py",
+}
+
+
+def _tool_files():
+    return sorted(path for path in TOOLS_DIR.glob("*.py") if path.name not in NOT_TOOLS)
+
+
+def _public_names(source):
+    """Names of the public functions and classes defined at the top of a module."""
+    tree = ast.parse(source)
+    return [
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and not node.name.startswith("_")
+    ]
+
+
+def _financial_names(source):
+    return [name for name in _public_names(source)
+            if any(word in name.lower() for word in FINANCIAL_WORDS)]
+
+
+def _forbidden_imports(source):
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            roots = [node.module.split(".")[0]]
+        else:
+            continue
+        found += [root for root in roots if root in FORBIDDEN_IMPORTS]
+    return found
+
+
+def test_the_tool_scan_finds_every_known_tool():
+    """Guards against an empty scan (wrong folder) that would make the G12 tests pass for nothing."""
+    assert KNOWN_TOOLS <= {path.name for path in _tool_files()}
+
+
+@pytest.mark.parametrize("path", _tool_files(), ids=lambda path: path.name)
+def test_every_tool_declares_an_allowed_effect(path):
+    module = importlib.import_module(f"src.agent.tools.{path.stem}")
+    assert getattr(module, "TOOL_EFFECT", None) in ALLOWED_EFFECTS
+
+
+@pytest.mark.parametrize("path", _tool_files(), ids=lambda path: path.name)
+def test_no_tool_offers_a_financial_action(path):
+    assert _financial_names(path.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize("path", _tool_files(), ids=lambda path: path.name)
+def test_no_tool_imports_network_or_shell(path):
+    assert _forbidden_imports(path.read_text(encoding="utf-8")) == []
+
+
+def test_g12_checks_catch_a_planted_tool():
+    """The checks really fire: a fake tool with a payment function and a network import is caught."""
+    source = (
+        "import requests\nfrom urllib.request import urlopen\n"
+        "def freeze_account(case_id):\n    pass\n"
+        "class PaymentClient:\n    pass\n"
+        "def _private_helper():\n    pass\n"
+    )
+    assert _financial_names(source) == ["freeze_account", "PaymentClient"]
+    assert _forbidden_imports(source) == ["requests", "urllib"]
