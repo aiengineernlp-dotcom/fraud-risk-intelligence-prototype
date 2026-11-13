@@ -23,6 +23,10 @@ from src.agent.domain import CaseState
 # Decision (e): the labels never enter a case (section 10.2: "jamais l'étiquette").
 LABEL_COLUMNS = frozenset({"isFraud", "isFlaggedFraud"})
 
+# Decision PR 9 (a): the only values of cases.priority. A copy of routing_policy.PRIORITIES, because
+# layer 2 never imports layer 3; tests/test_review_and_audit.py checks the two sets are equal.
+ALLOWED_PRIORITIES = frozenset({"high", "normal"})
+
 
 class DuplicateCaseError(Exception):
     """Raised when a case_id already exists: a case is created only once (D-07)."""
@@ -42,6 +46,10 @@ class CaseNotFoundError(Exception):
 
 class LabelInCaseError(ValueError):
     """Raised when the transaction of a case contains isFraud or isFlaggedFraud (decision (e))."""
+
+
+class InvalidPriorityError(ValueError):
+    """Raised when the priority is not one of ALLOWED_PRIORITIES (decision PR 9 (a))."""
 
 
 @dataclass(frozen=True)
@@ -142,6 +150,24 @@ def update_state(conn: sqlite3.Connection, case_id: str, new_state: CaseState) -
         cursor = conn.execute(
             "UPDATE cases SET state = ?, updated_at = ? WHERE case_id = ?",
             (new_state.value, utc_now(), case_id),
+        )
+    if cursor.rowcount == 0:
+        raise CaseNotFoundError(case_id)
+
+
+def set_priority(conn: sqlite3.Connection, case_id: str, priority: str) -> None:
+    """Store the priority ALREADY decided by routing_policy.py (n° 54); decide nothing.
+
+    Only `priority` and `updated_at` change. A recomputed priority overwrites the old one: the
+    history stays in the audit trail (decision PR 9, GO of the plan).
+    """
+    # No CHECK in db.py (a schema change without migration, Q-11): this check is the only barrier.
+    if not isinstance(priority, str) or priority not in ALLOWED_PRIORITIES:
+        raise InvalidPriorityError(f"Priority must be one of {sorted(ALLOWED_PRIORITIES)}")
+    with conn:
+        cursor = conn.execute(
+            "UPDATE cases SET priority = ?, updated_at = ? WHERE case_id = ?",
+            (priority, utc_now(), case_id),
         )
     if cursor.rowcount == 0:
         raise CaseNotFoundError(case_id)
