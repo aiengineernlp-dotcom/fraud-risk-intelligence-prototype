@@ -6,7 +6,7 @@
 
 ## 1. OÙ ON EN EST
 - Phase : Phase 1 – J4 Agent et LLM, **vibe coding contrôlé** (AS-15 ; I35, I39) — agent de code : Claude Code, en local ; Temps 2 de chaque pull request dans le chat « Capstone · M4 · Phase 1 – J4 agent et LLM »
-- Arrêtée exactement à : PR 5 **fusionnée** (#6, `365573a`, 277 passed) ; PR 6 (validateur, H01–H05 + F07, n° 49 à 53) **en cours** dans `tache/H01-validateur` — étape 1 faite (n° 49, 50)
+- Arrêtée exactement à : PR 5 **fusionnée** (#6, `365573a`, 277 passed) ; PR 6 (validateur, H01–H05 + F07, n° 49 à 53) **en cours** dans `tache/H01-validateur` — étapes 1 et 2 faites (n° 49, 50, 51, 53 commencé) ; 321 passed
 - Branche / pull request : `tache/H01-validateur` (depuis `main` `365573a`), pas encore poussée ; pull request à ouvrir par le fondateur (PR #2 à #6 fusionnées ; #1 essai fermé)
 - Décisions J3 à ne pas rediscuter : découpage stratifié 70/15/15, graine 42 dans `configs/settings.yaml` (I34) ; 12 variables (I36) ; Random Forest choisie sur la PR-AUC de validation (I09) ; seuil 0,5492 pour 300 cas/jour, marge 0,05 (I08) ; permutation seule (I10) ; seuil et métadonnées seulement dans `model_metadata.json` (I20)
 - Décisions J4 : `main` protégée par garde-fous locaux + CI (compte GitHub Free, I40) ; `CLAUDE.md` = `@AGENTS.md` (I41) ; points de contrôle : J4 gelé ven. 13 nov. 23 h 00, J5 gelé sam. 14 nov. 15 h 00, J6 prêt sam. 14 nov. 23 h 59 ; remise dim. 15 nov. 10 h 45 (I42)
@@ -38,9 +38,10 @@
 - [x] PR 5 — branche `tache/G04-outils` poussée (`git push -u origin tache/G04-outils` → `[new branch]`, 2026-11-13) ; 4 commits `5e10049`, `33b0602`, `e137c43`, `5ade46a` + passation
 - [x] PR 5 fusionnée : pull request #6, merge `365573a` ; 277 passed sur `main` (annoncé par le fondateur, 2026-11-13)
 - [x] PR 6 — étape 1 : `configs/prohibited_terms.yaml` (n° 49 : 5 catégories `allegation`, `definitive`, `action`, `label`, `injection` — décisions (b), (d) ; « 100% » seul absent, « 100% certain » et « 100% sure » présents), `src/agent/validators/investigation_schema.py` (n° 50 : `InvestigationDraft`, 10 champs de l'énoncé §10.2, Pydantic strict, `extra="forbid"`, pas de NaN / infini ; `evidence` = liste de `{source_id, note}` ; `REQUIRED_FIELDS`) ; essai manuel : `"0.5"` en texte, `true`, `NaN` refusés pour `model_score`, entier accepté (2026-11-13)
+- [x] PR 6 — étape 2 : `src/agent/validators/investigation_validator.py` (n° 51 : `load_prohibited_terms(path)` → `ProhibitedTerms`, fichier absent / cassé / catégorie vide → `ProhibitedTermsError` ; `validate_investigation(raw_json, official, case_id, evidence, terms)` → `ValidationResult(passed, reasons, draft)` ; JSON illisible ou schéma faux → arrêt ; sinon toutes les raisons : `case_id`, `validation_status` « pending », bande officielle, score (`MODEL_SCORE_ABS_TOLERANCE = 1e-9`) et version, `source_id` ⊂ preuves fournies, F07, termes en mots entiers sans casse), `tests/test_validator.py` (n° 53 : 44 tests `validation_workflow`, dont les 7 du registre, « 100.0% of the origin account balance » accepté, « 100% certain / sure » refusés, brouillon obéissant à une note piégée inventée → 5 raisons) ; `.venv/bin/python -m pytest -q` → 321 passed in 7.39s ; `-m validation_workflow` → 44 passed (2026-11-13)
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
-- [ ] PR 6 — H01–H05 + F07 : n° 51 validateur, n° 52 outil, n° 53 tests (n° 49, 50 faits) ; puis fondateur : pull request, CI, Temps 2, fusion
+- [ ] PR 6 — H01–H05 + F07 : n° 52 outil et ses tests (n° 49, 50, 51 faits) ; puis fondateur : pull request, CI, Temps 2, fusion
 - [ ] Fondateur : registre `Architecture_Projet.md` §8 corrigé pour Q-18 (accepté)
 - [ ] PR 7 🔒 — F01, F02 : n° 55 à 58, n° 59
 - [ ] PR 8 — F03–F05 : n° 60, 61
