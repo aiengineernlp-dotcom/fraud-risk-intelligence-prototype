@@ -1,4 +1,4 @@
-> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Architecture_Projet.md, version du 2026-11-12. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
+> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Architecture_Projet.md, version du 2026-11-13. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
 
 # ARCHITECTURE PROJET — Capstone_Project_1
 
@@ -697,7 +697,7 @@ capstone-project-1/
 | `data/demo/cases.json` · `data/demo/evidence_store.json` | Cas et preuves synthétiques de démo (générés, versionnés) | 1 — Data (généré) | J4 | Produits par le script | Étiquette, donnée personnelle | 38 | `tests/test_security.py` |
 | `src/data/case_input.py` | Valider l'entrée d'un cas (ID, champs vérifiés, types) et rendre un objet typé | 2 — Ingestion/Parser | J4 | `schema.py`, `domain.py`, `config.py` | Décider | 39 | `tests/test_tools.py::test_invalid_input_rejected` |
 | `src/models/risk_bands.py` | Transformer un score en bande low / medium / high selon les bornes reçues en paramètre (lues dans `model_metadata.json` par `score_transaction`, v1.1) | 3 — Logic Engine | J4 | — (bornes reçues en paramètre) | LLM, UI, `config.py` | 40 | `tests/test_risk_bands.py` |
-| `scripts/set_risk_band_bounds.py` | Écrire les bornes des bandes (I46) dans `model_metadata.json` : borne medium = `threshold` des métadonnées ; borne high = seuil de la ligne 200 cas/jour de `threshold_analysis.csv` (validation) ; sans réentraîner (I47) | Entraînement (ML) | J4 | `config.py` (chemins), `artifacts/metrics/threshold_analysis.csv`, `model_metadata.json` | Réentraîner ; ouvrir le test ; inventer une valeur | 40bis | `tests/test_risk_bands.py` (fichiers temporaires) |
+| `scripts/set_risk_band_bounds.py` | Écrire les bornes des bandes (I46) dans `model_metadata.json` : borne medium = `threshold` des métadonnées ; borne high = seuil de la ligne 200 cas/jour de `threshold_analysis.csv` (validation) ; sans réentraîner (I47) | Entraînement (ML) | J4 | `config.py` (chemins), `risk_bands.py` (`check_bounds`, même règle des bornes — Q-08, 2026-11-13), `artifacts/metrics/threshold_analysis.csv`, `model_metadata.json` | Réentraîner ; ouvrir le test ; inventer une valeur | 40bis | `tests/test_risk_bands.py` (fichiers temporaires) |
 | `tests/test_risk_bands.py` | Chaque score donne une bande ; bornes testées | Tests | J4 | `risk_bands.py` | — | 41 | (fichier de test) |
 | `src/agent/state_machine.py` | États, transitions autorisées, refus des transitions invalides | 3 — Logic Engine | J4 | `domain.py` | LLM, base | 42 | `tests/test_state_machine.py` |
 | `tests/test_state_machine.py` | Chemin valide ; transition invalide refusée ; états finaux définitifs | Tests | J4 | `state_machine.py` | — | 43 | (fichier de test) |
