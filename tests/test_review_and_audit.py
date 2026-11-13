@@ -14,7 +14,9 @@ import sqlite3
 
 import pytest
 
-from src.agent.domain import REVIEWER_OUTCOMES, CaseState
+from src.agent.domain import REVIEWER_OUTCOMES, AuditEvent, CaseState
+from src.audit import audit_repository
+from src.audit.audit_repository import SecretInAuditError, append_event, list_events
 from src.storage.case_repository import (
     CaseNotFoundError,
     DuplicateCaseError,
@@ -193,3 +195,137 @@ def test_step_result_constraints_still_apply(db_conn):
         save_step_result(db_conn, "CASE-1", "score", {}, 0)  # attempts >= 1
     with pytest.raises(sqlite3.IntegrityError):
         save_step_result(db_conn, "UNKNOWN", "score", {}, 1)  # foreign key
+
+
+# --- audit_repository.py (n° 35) -----------------------------------------------------------------
+
+
+def _event(case_id: str = "CASE-1", **changes) -> AuditEvent:
+    fields = dict(
+        case_id=case_id,
+        timestamp=NOW,
+        actor="system",
+        action="transition",
+        result="ok",
+        state_from=CaseState.RECEIVED,
+        state_to=CaseState.SCORED,
+        details={"attempt": 1, "latency_ms": 12},
+        model_version="rf-v1",
+        prompt_version=None,
+    )
+    fields.update(changes)
+    return AuditEvent(**fields)
+
+
+def test_append_and_read_events_in_order(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    first = _event()
+    second = _event(
+        actor="tool:score_transaction", action="tool_call", result="timeout",
+        state_from=None, state_to=None, details=None,
+    )
+    third = _event(action="invalid_transition", result="rejected", state_to=CaseState.VALIDATED)
+    ids = [append_event(db_conn, e) for e in (first, second, third)]
+
+    stored = list_events(db_conn, "CASE-1")
+    assert ids == sorted(ids) and len(set(ids)) == 3
+    assert [s.event_id for s in stored] == ids
+    assert [s.event for s in stored] == [first, second, third]  # every field round-trips
+
+
+def test_events_filtered_by_case(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    create_case(db_conn, "CASE-2", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event("CASE-1"))
+    append_event(db_conn, _event("CASE-2"))
+    append_event(db_conn, _event("CASE-1"))
+    assert [s.event.case_id for s in list_events(db_conn, "CASE-1")] == ["CASE-1", "CASE-1"]
+    assert list_events(db_conn, "UNKNOWN") == []
+
+
+def test_event_for_unknown_case_refused(db_conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        append_event(db_conn, _event("UNKNOWN"))
+
+
+def test_audit_update_refused_by_trigger(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    event_id = append_event(db_conn, _event())
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with db_conn:
+            db_conn.execute(
+                "UPDATE audit_events SET result = 'failed' WHERE event_id = ?", (event_id,)
+            )
+    assert list_events(db_conn, "CASE-1")[0].event.result == "ok"
+
+
+def test_audit_delete_refused_by_trigger(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event())
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with db_conn:
+            db_conn.execute("DELETE FROM audit_events")
+    assert len(list_events(db_conn, "CASE-1")) == 1
+
+
+def test_audited_case_cannot_be_deleted(db_conn):
+    # No ON DELETE CASCADE: deleting the case would orphan its audit events, so it is refused.
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event())
+    with pytest.raises(sqlite3.IntegrityError):
+        with db_conn:
+            db_conn.execute("DELETE FROM cases WHERE case_id = 'CASE-1'")
+
+
+def test_audit_repository_has_no_update_or_delete():
+    public = [name for name in dir(audit_repository) if not name.startswith("_")]
+    forbidden = ("update", "delete", "remove", "edit", "modify", "clear", "drop")
+    assert not [n for n in public if any(word in n.lower() for word in forbidden)]
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"api_key": "x"},
+        {"OPENAI_API_KEY": "x"},
+        {"apikey": "x"},
+        {"key": "x"},
+        {"access_token": "x"},
+        {"client-secret": "x"},
+        {"db_password": "x"},
+        {"passwd": "x"},
+        {"request": {"headers": {"auth_token": "x"}}},
+        {"calls": [{"ok": 1}, {"token": "x"}]},
+    ],
+)
+def test_secret_key_in_details_refused(db_conn, details):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    with pytest.raises(SecretInAuditError):
+        append_event(db_conn, _event(details=details))
+    assert list_events(db_conn, "CASE-1") == []  # nothing written
+
+
+def test_token_count_allowed(db_conn):
+    # Whole pieces only: token counts and the idempotency key are not secrets.
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    details = {"prompt_tokens": 120, "completion_tokens": 80, "idempotency_key": "CASE-1:draft",
+               "monkey": 1, "keyword": "x"}
+    append_event(db_conn, _event(details=details))
+    assert list_events(db_conn, "CASE-1")[0].event.details == details
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    ["2026-11-13T10:00:00", "2026-11-13T11:00:00+01:00", "13/11/2026 10:00", ""],
+)
+def test_non_utc_timestamp_refused(db_conn, timestamp):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    with pytest.raises(ValueError):
+        append_event(db_conn, _event(timestamp=timestamp))
+    assert list_events(db_conn, "CASE-1") == []
+
+
+def test_utc_z_timestamp_accepted(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event(timestamp="2026-11-13T10:00:00Z"))
+    assert len(list_events(db_conn, "CASE-1")) == 1
