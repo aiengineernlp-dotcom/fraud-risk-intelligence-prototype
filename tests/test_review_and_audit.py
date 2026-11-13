@@ -15,16 +15,20 @@ import sqlite3
 import pytest
 
 from src.agent.domain import REVIEWER_OUTCOMES, AuditEvent, CaseState
+from src.agent.routing_policy import PRIORITIES
 from src.audit import audit_repository
 from src.audit.audit_repository import SecretInAuditError, append_event, list_events
 from src.storage.case_repository import (
+    ALLOWED_PRIORITIES,
     CaseNotFoundError,
     DuplicateCaseError,
+    InvalidPriorityError,
     LabelInCaseError,
     create_case,
     get_case,
     get_step_result,
     save_step_result,
+    set_priority,
     update_state,
 )
 from src.storage.db import create_tables, init_db
@@ -329,3 +333,53 @@ def test_utc_z_timestamp_accepted(db_conn):
     create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
     append_event(db_conn, _event(timestamp="2026-11-13T10:00:00Z"))
     assert len(list_events(db_conn, "CASE-1")) == 1
+
+
+# --- set_priority (PR 9, decision (a)) — sensitive zone: only `priority` and `updated_at` change ---
+
+LATER = "2026-11-13T11:00:00.000000+00:00"
+
+
+def test_priority_sets_match():
+    """Layer 2 keeps its own copy of the priorities (it never imports layer 3): both must agree."""
+    assert ALLOWED_PRIORITIES == PRIORITIES == frozenset({"high", "normal"})
+
+
+def test_set_priority_writes_only_priority(db_conn, monkeypatch):
+    before = create_case(db_conn, "CASE-1", CaseState.HUMAN_REVIEW, TRANSACTION, "note")
+    monkeypatch.setattr("src.storage.case_repository.utc_now", lambda: LATER)
+    set_priority(db_conn, "CASE-1", "high")
+    after = get_case(db_conn, "CASE-1")
+    assert after.priority == "high"
+    assert after.updated_at == LATER
+    unchanged = ("case_id", "state", "transaction", "case_note", "reviewer_decision",
+                 "reviewer_comment", "created_at")
+    assert all(getattr(after, name) == getattr(before, name) for name in unchanged)
+
+
+def test_set_priority_recomputed_is_overwritten(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.HUMAN_REVIEW, TRANSACTION)
+    set_priority(db_conn, "CASE-1", "high")
+    set_priority(db_conn, "CASE-1", "normal")
+    assert get_case(db_conn, "CASE-1").priority == "normal"
+
+
+@pytest.mark.parametrize("bad", ["urgent", "HIGH", "", None, 1, "high; DROP TABLE cases"])
+def test_set_priority_rejects_unknown_value(db_conn, bad):
+    before = create_case(db_conn, "CASE-1", CaseState.HUMAN_REVIEW, TRANSACTION)
+    with pytest.raises(InvalidPriorityError):
+        set_priority(db_conn, "CASE-1", bad)
+    assert get_case(db_conn, "CASE-1") == before
+
+
+def test_set_priority_unknown_case(db_conn):
+    with pytest.raises(CaseNotFoundError):
+        set_priority(db_conn, "CASE-404", "high")
+
+
+def test_set_priority_touches_one_case(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.HUMAN_REVIEW, TRANSACTION)
+    other = create_case(db_conn, "CASE-2", CaseState.HUMAN_REVIEW, TRANSACTION)
+    set_priority(db_conn, "CASE-1", "high")
+    assert get_case(db_conn, "CASE-1").priority == "high"
+    assert get_case(db_conn, "CASE-2") == other
