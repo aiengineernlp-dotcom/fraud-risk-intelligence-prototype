@@ -1,12 +1,14 @@
 """
 SoC layer      : Tests
 Responsibility : Test the inputs of the agent tools: case input checks (n° 39), approved evidence
-                 store (n° 36), demo cases and evidence builder (n° 37) (started at J4, PR 4;
-                 the tools n° 44 to 47 are added at PR 5)
+                 store (n° 36), demo cases and evidence builder (n° 37) (started at J4, PR 4);
+                 the tools n° 44 to 47, their errors and the "no financial action" proof (G12)
+                 (added at PR 5)
 Never does     : Load the real PaySim file or the trained model; call the network or an LLM;
                  write outside tmp_path
-Reference      : Architecture_Projet.md v1.3 — section 8 (n° 48, tests of n° 36, 37, 39), D-09, D-10;
-                 Features_Complet.md G05, G08, F07; PASSATION.md §6, decisions PR 4
+Reference      : Architecture_Projet.md v1.3 — section 8 (n° 48, tests of n° 36, 37, 39, 44 to 47),
+                 D-07, D-09, D-10, D-12; Features_Complet.md G04, G05, G07, G08, G12, F07;
+                 PASSATION.md §6, decisions PR 4 and PR 5
 """
 
 from __future__ import annotations
@@ -17,8 +19,16 @@ import re
 import numpy as np
 import pytest
 
-from src.agent.domain import EvidenceItem
+from src.agent.domain import CaseState, EvidenceItem
+from src.agent.tools.errors import (
+    DuplicateSubmissionError,
+    ToolError,
+    ToolInputError,
+    ToolUnavailableError,
+)
+from src.agent.tools.intake_case import intake_case
 from src.data.case_input import CaseInput, CaseInputError, parse_case_input
+from src.storage.case_repository import get_case
 from src.data.load_paysim import load_raw
 from src.data.split import stratified_split
 from src.storage.evidence_repository import EvidenceStoreError, get_evidence
@@ -358,3 +368,55 @@ def test_written_json_is_stable(tmp_path):
     path = tmp_path / "out" / "doc.json"
     build_demo_cases.write_json({"b": 1, "a": [1, 2]}, path)
     assert path.read_text(encoding="utf-8") == '{\n  "a": [\n    1,\n    2\n  ],\n  "b": 1\n}\n'
+
+
+# --- errors.py (PR 5, decision (e)) ---------------------------------------------------------------
+
+def test_tool_error_families():
+    """Two families the orchestrator can tell apart: bad input (no retry) and unavailable (retry)."""
+    assert issubclass(ToolInputError, ToolError)
+    assert issubclass(ToolUnavailableError, ToolError)
+    assert issubclass(DuplicateSubmissionError, ToolInputError)
+    assert not issubclass(ToolUnavailableError, ToolInputError)
+
+
+# --- n° 44 intake_case.py -------------------------------------------------------------------------
+
+def test_intake_creates_case_received(db_conn):
+    record = intake_case(db_conn, _valid_input())
+    assert record.case_id == "CASE-0001"
+    assert record.state is CaseState.RECEIVED
+    assert record.case_note == "Synthetic note."
+    assert record.transaction == {
+        "step": 1, "type": "TRANSFER", "amount": 181.0, "oldbalanceOrg": 181.0,
+        "newbalanceOrig": 0.0, "oldbalanceDest": 0.0, "newbalanceDest": 0.0,
+    }
+    assert get_case(db_conn, "CASE-0001") == record
+
+
+@pytest.mark.parametrize("raw", [
+    _valid_input(isFraud=1),
+    _valid_input(isFlaggedFraud=0),
+    {k: v for k, v in _valid_input().items() if k != "amount"},
+    _valid_input(amount="181"),
+    _valid_input(case_id="case-1"),
+    None,
+])
+def test_intake_invalid_input_rejected(db_conn, raw):
+    with pytest.raises(ToolInputError):
+        intake_case(db_conn, raw)
+    assert db_conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 0
+
+
+def test_intake_duplicate_rejected(db_conn):
+    first = intake_case(db_conn, _valid_input())
+    with pytest.raises(DuplicateSubmissionError) as caught:
+        intake_case(db_conn, _valid_input(amount=999.0, case_note="Changed."))
+    assert caught.value.case_id == "CASE-0001"
+    assert get_case(db_conn, "CASE-0001") == first  # the original case is unchanged
+
+
+def test_intake_database_failure_is_unavailable(db_conn):
+    db_conn.close()  # a closed connection stands for a broken database
+    with pytest.raises(ToolUnavailableError):
+        intake_case(db_conn, _valid_input())
