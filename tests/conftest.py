@@ -49,3 +49,12 @@ def invalid_paysim_csv(tmp_path: Path) -> Path:
     path = tmp_path / "paysim_invalid.csv"
     df.to_csv(path, index=False)
     return path
+
+@pytest.fixture
+def db_conn(tmp_path: Path):
+    """Base SQLite temporaire avec le schéma §10.2 (jamais data/runtime/) ; fermée après le test."""
+    from src.storage.db import init_db
+
+    conn = init_db(tmp_path / "test_capstone.db")
+    yield conn
+    conn.close()
