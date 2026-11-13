@@ -27,6 +27,8 @@
 - [x] PR 3 — étape 3 : `src/storage/case_repository.py` (n° 34 : `create_case`, `get_case`, `update_state`, `save_step_result` → `(StepResult, created)`, `get_step_result` ; `DuplicateCaseError`, `CaseNotFoundError`, `LabelInCaseError`), tests 9 à 12 (+ étiquettes refusées, contraintes conservées) ; `.venv/bin/python -m pytest -q` → 132 passed in 6.53s (2026-11-13)
 - [x] PR 3 — étape 4 : `src/audit/audit_repository.py` (n° 35 : `append_event` → `event_id`, `list_events` par `event_id`, `StoredAuditEvent`, `SecretInAuditError`, horodatage non UTC → `ValueError` ; aucune fonction de modification ni de suppression), tests 13 à 19 ; `.venv/bin/python -m pytest -q` → 155 passed in 7.18s (2026-11-13 ; 101 anciens + 54 dans `tests/test_review_and_audit.py`)
 
+- [x] PR 4 — étape 1 : `src/data/case_input.py` (n° 39 : `parse_case_input` → `CaseInput` figé, `CaseInputError` ; 7 champs de rôle `FEATURE` pris dans `schema.COLUMNS` ; champ inconnu, étiquette, identifiant, mauvais type, booléen, NaN / infini, négatif, `type` hors liste → refusés ; `case_note` facultatif, sans longueur maximale), `tests/test_tools.py` (n° 48, commencé : 28 tests) ; `.venv/bin/python -m pytest -q` → 183 passed in 6.95s (2026-11-13)
+
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
 - [ ] PR 4 — G08 : n° 36, 37, 38, 39 (en cours, `tache/G08-cas-preuves-demo`)
 - [ ] PR 5 — G04, G05, G07 : n° 44 à 47, n° 48 (+ petit pipeline de test dans `tests/conftest.py`)
