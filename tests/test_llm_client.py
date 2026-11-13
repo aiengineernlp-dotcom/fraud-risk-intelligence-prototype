@@ -11,6 +11,7 @@ Reference      : Architecture_Projet.md v1.3 — section 4 (D-04, D-05, D-08), s
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import json
 import logging
@@ -23,6 +24,7 @@ import pytest
 
 from src.agent.domain import EvidenceItem, ScoreResult
 from src.agent.llm.base import LLMClient, LLMError, LLMMessage, LLMResponse, LLMTimeout, LLMUnavailable
+from src.agent.llm.factory import create_llm_client
 from src.agent.llm.fake_client import (
     FAKE_MODEL_NAME,
     PROHIBITED_TERM,
@@ -34,7 +36,7 @@ from src.agent.llm.fake_client import (
 )
 from src.agent.llm.openai_compatible_client import OpenAICompatibleClient
 from src.agent.tools.validate_investigation_json import validate_investigation_json
-from src.config import LLMSettings, Secret
+from src.config import AppConfig, LLMSettings, Paths, RetrySettings, Secret, SplitSettings
 
 
 @pytest.fixture(autouse=True)
@@ -352,3 +354,69 @@ def test_adapter_refuses_missing_settings_by_name_only(field, value, name):
 def test_adapter_refuses_a_non_positive_delay(timeout_seconds):
     with pytest.raises(ValueError, match="timeout_seconds"):
         OpenAICompatibleClient(SETTINGS, timeout_seconds=timeout_seconds)
+
+
+# --- n° 58 factory.py ---------------------------------------------------------
+# AppConfig built by hand: load_config() is never called here (it would read the real .env).
+
+
+def _config(llm: LLMSettings, llm_timeout: float = TIMEOUT) -> AppConfig:
+    unused = Path("unused")
+    return AppConfig(
+        tool_retries=RetrySettings(max_retries=0, timeout_seconds=1.0),
+        llm_retries=RetrySettings(max_retries=0, timeout_seconds=llm_timeout),
+        near_threshold_margin=None,
+        review_capacity_per_day=1,
+        split=SplitSettings(seed=0, val_size=0.1, test_size=0.1),
+        paths=Paths(*([unused] * len(dataclasses.fields(Paths)))),
+        llm=llm,
+    )
+
+
+FAKE_SETTINGS = LLMSettings(provider="fake", base_url="", model="", api_key=Secret(""))
+FACTS = DraftFacts.from_official(CASE_ID, OFFICIAL, EVIDENCE)
+
+
+def test_factory_selects_client():
+    fake = create_llm_client(_config(FAKE_SETTINGS), fake_scenario="malformed", fake_facts=FACTS)
+    assert isinstance(fake, FakeLLMClient)
+    assert (fake.scenario, fake.facts) == ("malformed", FACTS)
+
+    real = create_llm_client(_config(SETTINGS, llm_timeout=12.0))
+    assert isinstance(real, OpenAICompatibleClient)
+    assert real.timeout_seconds == 12.0  # the delay of settings.yaml, given by the factory
+
+
+def test_factory_fake_defaults_to_valid():
+    assert create_llm_client(_config(FAKE_SETTINGS), fake_facts=FACTS).scenario == "valid"
+
+
+def test_factory_fake_needs_the_facts():
+    with pytest.raises(ValueError, match="fake_facts"):
+        create_llm_client(_config(FAKE_SETTINGS))
+
+
+def test_factory_refuses_an_unknown_provider():
+    with pytest.raises(ValueError, match="Unknown LLM provider"):
+        create_llm_client(_config(dataclasses.replace(FAKE_SETTINGS, provider="mystery")))
+
+
+def test_llm_package_never_reads_the_environment():
+    # Only src/config.py reads .env (load_dotenv); the LLM files receive their settings.
+    # Read with ast (code only, not the comments), like the G12 test of test_tools.py.
+    llm_dir = Path(__file__).resolve().parents[1] / "src" / "agent" / "llm"
+    files = sorted(llm_dir.glob("*.py"))
+    assert {f.name for f in files} >= {"base.py", "fake_client.py", "openai_compatible_client.py", "factory.py"}
+    forbidden_modules = {"os", "dotenv"}
+    forbidden_names = {"getenv", "environ", "load_dotenv", "load_config"}
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                modules = {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                modules = {(node.module or "").split(".")[0]} | {alias.name for alias in node.names}
+            else:
+                modules = set()
+            assert not modules & (forbidden_modules | forbidden_names), f"{modules} imported in {path.name}"
+            name = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None
+            assert name not in forbidden_names, f"{name} used in {path.name}"
