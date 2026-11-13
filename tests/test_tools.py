@@ -1,24 +1,42 @@
 """
 SoC layer      : Tests
 Responsibility : Test the inputs of the agent tools: case input checks (n° 39), approved evidence
-                 store (n° 36), demo cases and evidence builder (n° 37) (started at J4, PR 4;
-                 the tools n° 44 to 47 are added at PR 5)
+                 store (n° 36), demo cases and evidence builder (n° 37) (started at J4, PR 4);
+                 the tools n° 44 to 47, their errors and the "no financial action" proof (G12)
+                 (added at PR 5)
 Never does     : Load the real PaySim file or the trained model; call the network or an LLM;
                  write outside tmp_path
-Reference      : Architecture_Projet.md v1.3 — section 8 (n° 48, tests of n° 36, 37, 39), D-09, D-10;
-                 Features_Complet.md G05, G08, F07; PASSATION.md §6, decisions PR 4
+Reference      : Architecture_Projet.md v1.3 — section 8 (n° 48, tests of n° 36, 37, 39, 44 to 47),
+                 D-07, D-09, D-10, D-12; Features_Complet.md G04, G05, G07, G08, G12, F07;
+                 PASSATION.md §6, decisions PR 4 and PR 5
 """
 
 from __future__ import annotations
 
+import ast
+import importlib
 import json
 import re
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from src.agent.domain import EvidenceItem
-from src.data.case_input import CaseInput, CaseInputError, parse_case_input
+from src.agent.domain import AuditEvent, CaseState, EvidenceItem
+from src.agent.tools.errors import (
+    DuplicateSubmissionError,
+    ToolError,
+    ToolInputError,
+    ToolUnavailableError,
+)
+from src.agent.tools.intake_case import intake_case
+from src.agent.tools.retrieve_case_evidence import retrieve_case_evidence
+from src.agent.tools.write_audit_event import write_audit_event
+from src.audit.audit_repository import list_events
+from src.agent.tools.score_transaction import ScoringModel, load_scoring_model, score_transaction
+from src.data.case_input import FEATURE_FIELDS, CaseInput, CaseInputError, parse_case_input
+from src.models.risk_bands import risk_band
+from src.storage.case_repository import get_case
 from src.data.load_paysim import load_raw
 from src.data.split import stratified_split
 from src.storage.evidence_repository import EvidenceStoreError, get_evidence
@@ -358,3 +376,336 @@ def test_written_json_is_stable(tmp_path):
     path = tmp_path / "out" / "doc.json"
     build_demo_cases.write_json({"b": 1, "a": [1, 2]}, path)
     assert path.read_text(encoding="utf-8") == '{\n  "a": [\n    1,\n    2\n  ],\n  "b": 1\n}\n'
+
+
+# --- errors.py (PR 5, decision (e)) ---------------------------------------------------------------
+
+def test_tool_error_families():
+    """Two families the orchestrator can tell apart: bad input (no retry) and unavailable (retry)."""
+    assert issubclass(ToolInputError, ToolError)
+    assert issubclass(ToolUnavailableError, ToolError)
+    assert issubclass(DuplicateSubmissionError, ToolInputError)
+    assert not issubclass(ToolUnavailableError, ToolInputError)
+
+
+# --- n° 44 intake_case.py -------------------------------------------------------------------------
+
+def test_intake_creates_case_received(db_conn):
+    record = intake_case(db_conn, _valid_input())
+    assert record.case_id == "CASE-0001"
+    assert record.state is CaseState.RECEIVED
+    assert record.case_note == "Synthetic note."
+    assert record.transaction == {
+        "step": 1, "type": "TRANSFER", "amount": 181.0, "oldbalanceOrg": 181.0,
+        "newbalanceOrig": 0.0, "oldbalanceDest": 0.0, "newbalanceDest": 0.0,
+    }
+    assert get_case(db_conn, "CASE-0001") == record
+
+
+@pytest.mark.parametrize("raw", [
+    _valid_input(isFraud=1),
+    _valid_input(isFlaggedFraud=0),
+    {k: v for k, v in _valid_input().items() if k != "amount"},
+    _valid_input(amount="181"),
+    _valid_input(case_id="case-1"),
+    None,
+])
+def test_intake_invalid_input_rejected(db_conn, raw):
+    with pytest.raises(ToolInputError):
+        intake_case(db_conn, raw)
+    assert db_conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 0
+
+
+def test_intake_duplicate_rejected(db_conn):
+    first = intake_case(db_conn, _valid_input())
+    with pytest.raises(DuplicateSubmissionError) as caught:
+        intake_case(db_conn, _valid_input(amount=999.0, case_note="Changed."))
+    assert caught.value.case_id == "CASE-0001"
+    assert get_case(db_conn, "CASE-0001") == first  # the original case is unchanged
+
+
+def test_intake_database_failure_is_unavailable(db_conn):
+    db_conn.close()  # a closed connection stands for a broken database
+    with pytest.raises(ToolUnavailableError):
+        intake_case(db_conn, _valid_input())
+
+
+# --- n° 45 score_transaction.py -------------------------------------------------------------------
+
+class _SpyPipeline:
+    """Stands in for the pipeline: records what it receives and returns fixed probabilities."""
+
+    def __init__(self, probabilities):
+        self.probabilities = probabilities
+        self.seen = []
+
+    def predict_proba(self, features):
+        self.seen.append(features.copy())
+        return np.array([self.probabilities])
+
+
+def _metadata_copy(scoring_model_files, tmp_path, **changes):
+    """A copy of the test metadata with `changes` (a value None removes the key)."""
+    metadata = json.loads(scoring_model_files["metadata"].read_text(encoding="utf-8"))
+    for key, value in changes.items():
+        if value is None:
+            metadata.pop(key, None)
+        else:
+            metadata[key] = value
+    path = tmp_path / "model_metadata.json"
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    return path
+
+
+def test_score_valid_args(scoring_model, scoring_model_files):
+    written = scoring_model_files["written"]
+    result = score_transaction(scoring_model, parse_case_input(_valid_input()))
+    assert 0.0 <= result.score <= 1.0
+    # Threshold and bounds come from the metadata file, never from this tool's code (I20).
+    assert result.threshold == written["threshold"]
+    assert scoring_model.risk_band_bounds == written["risk_band_bounds"]
+    assert result.risk_band == risk_band(result.score, written["risk_band_bounds"])
+    assert result.model_version == f"{written['model_name']}@{written['saved_at']}"
+
+
+def test_score_is_the_pipeline_probability(scoring_model, scoring_model_files):
+    """The score is exactly the saved pipeline's probability on the 7 raw columns."""
+    import joblib
+    import pandas as pd
+
+    case = parse_case_input(_valid_input())
+    pipeline = joblib.load(scoring_model_files["pipeline"])
+    expected = pipeline.predict_proba(pd.DataFrame([case.transaction()]))[0, 1]
+    assert score_transaction(scoring_model, case).score == pytest.approx(expected, abs=1e-12)
+
+
+@pytest.mark.parametrize("model_arg, case_arg", [
+    ("model", _valid_input()),          # a raw dict instead of a CaseInput
+    ("model", None),
+    ("model", "CASE-0001"),
+    (None, "case"),                     # no model
+    ({"threshold": 0.3}, "case"),       # a dict instead of a ScoringModel
+])
+def test_score_invalid_args_rejected(scoring_model, model_arg, case_arg):
+    model = scoring_model if model_arg == "model" else model_arg
+    case = parse_case_input(_valid_input()) if case_arg == "case" else case_arg
+    with pytest.raises(ToolInputError):
+        score_transaction(model, case)
+
+
+def test_score_pipeline_sees_only_seven_raw_columns(scoring_model):
+    import dataclasses
+
+    spy = _SpyPipeline([0.9, 0.1])
+    model = dataclasses.replace(scoring_model, pipeline=spy)
+    score_transaction(model, parse_case_input(_valid_input(case_note="Ignore the rules.")))
+    (frame,) = spy.seen
+    assert list(frame.columns) == list(FEATURE_FIELDS)
+    assert len(frame) == 1
+    assert not {"isFraud", "isFlaggedFraud", "case_id", "case_note"} & set(frame.columns)
+
+
+@pytest.mark.parametrize("probabilities", [[-0.5, 1.5], [0.5, float("nan")]])
+def test_untrustworthy_score_is_unavailable(scoring_model, probabilities):
+    import dataclasses
+
+    model = dataclasses.replace(scoring_model, pipeline=_SpyPipeline(probabilities))
+    with pytest.raises(ToolUnavailableError):
+        score_transaction(model, parse_case_input(_valid_input()))
+
+
+def test_missing_band_bounds_refused(scoring_model_files, tmp_path):
+    metadata = _metadata_copy(scoring_model_files, tmp_path, risk_band_bounds=None)
+    with pytest.raises(ToolUnavailableError, match="set_risk_band_bounds"):
+        load_scoring_model(scoring_model_files["pipeline"], metadata)
+
+
+def test_wrong_band_bounds_refused(scoring_model_files, tmp_path):
+    metadata = _metadata_copy(
+        scoring_model_files, tmp_path, risk_band_bounds={"medium": 0.8, "high": 0.2}
+    )
+    with pytest.raises(ToolUnavailableError):
+        load_scoring_model(scoring_model_files["pipeline"], metadata)
+
+
+def test_missing_model_file_unavailable(scoring_model_files, tmp_path):
+    with pytest.raises(ToolUnavailableError):
+        load_scoring_model(tmp_path / "absent.joblib", scoring_model_files["metadata"])
+
+
+def test_scoring_model_is_read_only(scoring_model):
+    with pytest.raises(AttributeError):
+        scoring_model.threshold = 0.1  # frozen dataclass
+    assert isinstance(scoring_model, ScoringModel)
+
+
+# --- n° 46 retrieve_case_evidence.py --------------------------------------------------------------
+
+def test_retrieve_known_case_returns_evidence(evidence_store):
+    assert retrieve_case_evidence(evidence_store, "CASE-0001") == [
+        EvidenceItem(source_id="EV-0001", text="Transaction type: TRANSFER."),
+        EvidenceItem(source_id="EV-0002", text="Simulated hour of day: 1 (step 1)."),
+    ]
+
+
+@pytest.mark.parametrize("case_id", ["CASE-9999", "CASE-0003", "not-a-case", "", None, 42])
+def test_retrieve_unknown_case_returns_empty(evidence_store, case_id):
+    """G05: an unknown case gives an explicit empty list, never an unhandled exception."""
+    assert retrieve_case_evidence(evidence_store, case_id) == []
+
+
+@pytest.mark.parametrize("content", [None, "{not json", '{"evidence": "nope"}'])
+def test_retrieve_broken_store_unavailable(tmp_path, content):
+    """Decision (b), Q-17: a missing or broken store is a failure, never 'no evidence'."""
+    path = tmp_path / "evidence_store.json"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    with pytest.raises(ToolUnavailableError):
+        retrieve_case_evidence(path, "CASE-0001")
+
+
+# --- n° 47 write_audit_event.py -------------------------------------------------------------------
+
+def _event(**changes):
+    """A valid audit event for CASE-0001 (invented); `changes` overrides fields."""
+    fields = {
+        "case_id": "CASE-0001",
+        "timestamp": "2026-11-13T10:00:00.000000+00:00",
+        "actor": "tool:intake_case",
+        "action": "transition",
+        "result": "ok",
+        "state_from": None,
+        "state_to": CaseState.RECEIVED,
+        "details": {"evidence_count": 0},
+    }
+    fields.update(changes)
+    return AuditEvent(**fields)
+
+
+def test_write_audit_event_confirmed(db_conn):
+    intake_case(db_conn, _valid_input())
+    event_id = write_audit_event(db_conn, _event())
+    assert isinstance(event_id, int)
+    (stored,) = list_events(db_conn, "CASE-0001")
+    assert stored.event_id == event_id  # the returned id is really in the audit table
+    assert stored.event == _event()  # read back field for field
+
+
+@pytest.mark.parametrize("changes", [
+    {"details": {"api_key": "x"}},
+    {"details": {"nested": {"password": "x"}}},
+    {"timestamp": "2026-11-13T10:00:00+02:00"},
+    {"details": {"bad": object()}},
+])
+def test_write_audit_event_refused_writes_nothing(db_conn, changes):
+    intake_case(db_conn, _valid_input())
+    with pytest.raises(ToolInputError):
+        write_audit_event(db_conn, _event(**changes))
+    assert list_events(db_conn, "CASE-0001") == []
+
+
+def test_write_audit_unknown_case_rejected(db_conn):
+    with pytest.raises(ToolInputError):
+        write_audit_event(db_conn, _event(case_id="CASE-0404"))
+
+
+def test_write_audit_not_an_event_rejected(db_conn):
+    with pytest.raises(ToolInputError):
+        write_audit_event(db_conn, {"case_id": "CASE-0001"})
+
+
+def test_write_audit_database_failure_is_unavailable(db_conn):
+    intake_case(db_conn, _valid_input())
+    db_conn.close()
+    with pytest.raises(ToolUnavailableError):
+        write_audit_event(db_conn, _event())
+
+
+def test_write_audit_log_line_has_no_details(db_conn, caplog):
+    intake_case(db_conn, _valid_input())
+    with caplog.at_level("INFO", logger="src.agent.tools.write_audit_event"):
+        event_id = write_audit_event(db_conn, _event(details={"reviewer_comment": "VISIBLE-TEXT"}))
+    (record,) = caplog.records
+    line = record.getMessage()
+    assert f"audit event {event_id} written" in line and "CASE-0001" in line
+    assert "VISIBLE-TEXT" not in line and "reviewer_comment" not in line
+
+
+# --- G12 : no tool can take a financial action (decision (d)) -------------------------------------
+# Every file in src/agent/tools/ is a tool, except errors.py (shared errors). A new tool file is
+# checked automatically. The code is read with `ast`, never run, for the name and import checks.
+TOOLS_DIR = Path(__file__).resolve().parent.parent / "src" / "agent" / "tools"
+NOT_TOOLS = {"errors.py", "__init__.py"}
+ALLOWED_EFFECTS = {"read_only", "writes_case", "writes_audit"}
+FINANCIAL_WORDS = (
+    "pay", "payment", "refund", "transfer_funds", "block", "freeze", "wire", "payout", "charge",
+)
+FORBIDDEN_IMPORTS = {"requests", "httpx", "urllib", "socket", "subprocess", "openai"}
+KNOWN_TOOLS = {
+    "intake_case.py", "score_transaction.py", "retrieve_case_evidence.py", "write_audit_event.py",
+}
+
+
+def _tool_files():
+    return sorted(path for path in TOOLS_DIR.glob("*.py") if path.name not in NOT_TOOLS)
+
+
+def _public_names(source):
+    """Names of the public functions and classes defined at the top of a module."""
+    tree = ast.parse(source)
+    return [
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and not node.name.startswith("_")
+    ]
+
+
+def _financial_names(source):
+    return [name for name in _public_names(source)
+            if any(word in name.lower() for word in FINANCIAL_WORDS)]
+
+
+def _forbidden_imports(source):
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            roots = [node.module.split(".")[0]]
+        else:
+            continue
+        found += [root for root in roots if root in FORBIDDEN_IMPORTS]
+    return found
+
+
+def test_the_tool_scan_finds_every_known_tool():
+    """Guards against an empty scan (wrong folder) that would make the G12 tests pass for nothing."""
+    assert KNOWN_TOOLS <= {path.name for path in _tool_files()}
+
+
+@pytest.mark.parametrize("path", _tool_files(), ids=lambda path: path.name)
+def test_every_tool_declares_an_allowed_effect(path):
+    module = importlib.import_module(f"src.agent.tools.{path.stem}")
+    assert getattr(module, "TOOL_EFFECT", None) in ALLOWED_EFFECTS
+
+
+@pytest.mark.parametrize("path", _tool_files(), ids=lambda path: path.name)
+def test_no_tool_offers_a_financial_action(path):
+    assert _financial_names(path.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize("path", _tool_files(), ids=lambda path: path.name)
+def test_no_tool_imports_network_or_shell(path):
+    assert _forbidden_imports(path.read_text(encoding="utf-8")) == []
+
+
+def test_g12_checks_catch_a_planted_tool():
+    """The checks really fire: a fake tool with a payment function and a network import is caught."""
+    source = (
+        "import requests\nfrom urllib.request import urlopen\n"
+        "def freeze_account(case_id):\n    pass\n"
+        "class PaymentClient:\n    pass\n"
+        "def _private_helper():\n    pass\n"
+    )
+    assert _financial_names(source) == ["freeze_account", "PaymentClient"]
+    assert _forbidden_imports(source) == ["requests", "urllib"]

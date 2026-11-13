@@ -83,3 +83,66 @@ def small_paysim_csv(tmp_path: Path) -> Path:
     path = tmp_path / "paysim_small.csv"
     pd.DataFrame(rows, columns=_COLUMNS).to_csv(path, index=False)
     return path
+
+
+# --- PR 5 : petit modèle de score pour les tests (le vrai modèle n'est pas dans le dépôt) ----------
+
+# Valeurs inventées POUR LES TESTS SEULEMENT : jamais le seuil ni les bornes du vrai modèle (I20).
+TEST_THRESHOLD = 0.3
+TEST_RISK_BAND_BOUNDS = {"medium": 0.3, "high": 0.7}
+
+
+@pytest.fixture(scope="session")
+def scoring_model_files(tmp_path_factory) -> dict:
+    """Petit pipeline réel (prétraitement du projet + régression logistique) ajusté sur 60 lignes
+    inventées, enregistré avec save_model comme le vrai : rend les deux chemins et les métadonnées.
+
+    isFraud sert seulement de cible pour ajuster ce modèle de test ; il n'entre jamais dans un cas.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+
+    from src.features.build_features import MODEL_INPUT_COLUMNS, build_preprocessor
+    from src.models.model_io import save_model
+
+    types = ["TRANSFER", "CASH_OUT", "PAYMENT", "CASH_IN", "DEBIT"]
+    rows = []
+    for i in range(60):
+        amount = 100.0 + 50.0 * i
+        fraud = 1 if i % 6 == 0 else 0  # les fraudes inventées vident le compte d'origine
+        old_orig = amount if fraud else amount * 3
+        new_orig = 0.0 if fraud else old_orig - amount
+        rows.append([1 + i % 24, types[i % 5], amount, old_orig, new_orig, 0.0, amount, fraud])
+    frame = pd.DataFrame(rows, columns=[
+        "step", "type", "amount", "oldbalanceOrg", "newbalanceOrig",
+        "oldbalanceDest", "newbalanceDest", "isFraud",
+    ])
+    pipeline = Pipeline([
+        ("features", build_preprocessor()),
+        ("model", LogisticRegression(max_iter=1000)),
+    ])
+    pipeline.fit(frame.drop(columns=["isFraud"]), frame["isFraud"])
+
+    folder = tmp_path_factory.mktemp("scoring_model")
+    paths = {"pipeline": folder / "final_pipeline.joblib", "metadata": folder / "model_metadata.json"}
+    metadata = save_model(
+        pipeline,
+        {
+            "model_name": "test_logistic",
+            "threshold": TEST_THRESHOLD,
+            "risk_band_bounds": dict(TEST_RISK_BAND_BOUNDS),
+            "split": {"strategy": "test-only"},
+            "model_input_columns": list(MODEL_INPUT_COLUMNS),
+        },
+        paths["pipeline"],
+        paths["metadata"],
+    )
+    return {**paths, "written": metadata}
+
+
+@pytest.fixture(scope="session")
+def scoring_model(scoring_model_files):
+    """Le ScoringModel de test, chargé une fois par le vrai chemin (load_scoring_model)."""
+    from src.agent.tools.score_transaction import load_scoring_model
+
+    return load_scoring_model(scoring_model_files["pipeline"], scoring_model_files["metadata"])
