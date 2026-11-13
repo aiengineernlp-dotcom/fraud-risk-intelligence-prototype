@@ -6,8 +6,8 @@
 
 ## 1. OÙ ON EN EST
 - Phase : Phase 1 – J4 Agent et LLM, **vibe coding contrôlé** (AS-15 ; I35, I39) — agent de code : Claude Code, en local ; Temps 2 de chaque pull request dans le chat « Capstone · M4 · Phase 1 – J4 agent et LLM »
-- Arrêtée exactement à : PR 2 (D07) **fusionnée** (pull request #3, merge `0f1846c`) ; bornes des bandes écrites par le fondateur dans le vrai `model_metadata.json` (local) ; PR 3 🔒 (n° 33, 34, 35, 70) **codée** sur `tache/G10-stockage-audit` (5 commits, dernier = passation) ; 155 passed en local ; **à pousser (fondateur approuve), puis pull request à ouvrir par le fondateur** ; CI pas encore vue ; n° 36 à 39 et 44 à 65 à faire
-- Branche / pull request : `tache/G10-stockage-audit` (depuis `main` à `b745cf1`) ; pas encore de pull request (PR #2 et #3 fusionnées)
+- Arrêtée exactement à : PR 3 🔒 (n° 33, 34, 35, 70) **fusionnée** (pull request #4, merge `776d468`) ; 155 passed sur `main` ; PR 4 — G08 (n° 36 à 39) **en cours** sur `tache/G08-cas-preuves-demo` (plan validé, décisions (a)–(e) du fondateur, 2026-11-13) ; n° 44 à 65 à faire
+- Branche / pull request : `tache/G08-cas-preuves-demo` (depuis `main` à `16fa21b`) ; pas encore de pull request (PR #2, #3, #4 fusionnées)
 - Décisions J3 à ne pas rediscuter : découpage stratifié 70/15/15, graine 42 dans `configs/settings.yaml` (I34) ; 12 variables (I36) ; Random Forest choisie sur la PR-AUC de validation (I09) ; seuil 0,5492 pour 300 cas/jour, marge 0,05 (I08) ; permutation seule (I10) ; seuil et métadonnées seulement dans `model_metadata.json` (I20)
 - Décisions J4 : `main` protégée par garde-fous locaux + CI (compte GitHub Free, I40) ; `CLAUDE.md` = `@AGENTS.md` (I41) ; points de contrôle : J4 gelé ven. 13 nov. 23 h 00, J5 gelé sam. 14 nov. 15 h 00, J6 prêt sam. 14 nov. 23 h 59 ; remise dim. 15 nov. 10 h 45 (I42)
 - Ouvert : Temps 2 🟡 à reformuler avant l'oral : 8 du J3 + B162 (ouverture J4) + B163 à B166 (PR 1)
@@ -28,8 +28,7 @@
 - [x] PR 3 — étape 4 : `src/audit/audit_repository.py` (n° 35 : `append_event` → `event_id`, `list_events` par `event_id`, `StoredAuditEvent`, `SecretInAuditError`, horodatage non UTC → `ValueError` ; aucune fonction de modification ni de suppression), tests 13 à 19 ; `.venv/bin/python -m pytest -q` → 155 passed in 7.18s (2026-11-13 ; 101 anciens + 54 dans `tests/test_review_and_audit.py`)
 
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
-- [ ] PR 3 🔒 — pousser `tache/G10-stockage-audit` ; pull request (fondateur) ; CI verte ; Temps 2 ; fusion
-- [ ] PR 4 — G08 : n° 36, 37, 38, 39
+- [ ] PR 4 — G08 : n° 36, 37, 38, 39 (en cours, `tache/G08-cas-preuves-demo`)
 - [ ] PR 5 — G04, G05, G07 : n° 44 à 47, n° 48 (+ petit pipeline de test dans `tests/conftest.py`)
 - [ ] PR 6 — H01–H04 : n° 49 à 53
 - [ ] PR 7 🔒 — F01, F02 : n° 55 à 58, n° 59
