@@ -1,0 +1,186 @@
+{
+  "evidence": [
+    {
+      "case_id": "CASE-0001",
+      "source_id": "EV-0001",
+      "text": "Transaction type: TRANSFER."
+    },
+    {
+      "case_id": "CASE-0001",
+      "source_id": "EV-0002",
+      "text": "The origin account balance recorded before the transaction is 0.00."
+    },
+    {
+      "case_id": "CASE-0001",
+      "source_id": "EV-0003",
+      "text": "The origin balance change (0.00) differs from the amount (242562.46) by 242562.46."
+    },
+    {
+      "case_id": "CASE-0001",
+      "source_id": "EV-0004",
+      "text": "Simulated hour of day: 20 (step 212)."
+    },
+    {
+      "case_id": "CASE-0002",
+      "source_id": "EV-0005",
+      "text": "Transaction type: CASH_OUT."
+    },
+    {
+      "case_id": "CASE-0002",
+      "source_id": "EV-0006",
+      "text": "The amount (813133.35) is 100.0% of the origin account balance before the transaction (813133.35)."
+    },
+    {
+      "case_id": "CASE-0002",
+      "source_id": "EV-0007",
+      "text": "The origin account balance after the transaction is 0.00."
+    },
+    {
+      "case_id": "CASE-0002",
+      "source_id": "EV-0008",
+      "text": "Simulated hour of day: 18 (step 66)."
+    },
+    {
+      "case_id": "CASE-0004",
+      "source_id": "EV-0009",
+      "text": "Transaction type: TRANSFER."
+    },
+    {
+      "case_id": "CASE-0004",
+      "source_id": "EV-0010",
+      "text": "The amount (60226.06) is 100.0% of the origin account balance before the transaction (60226.06)."
+    },
+    {
+      "case_id": "CASE-0004",
+      "source_id": "EV-0011",
+      "text": "The origin account balance after the transaction is 0.00."
+    },
+    {
+      "case_id": "CASE-0004",
+      "source_id": "EV-0012",
+      "text": "The destination account balance is recorded as 0.00 before and after the transaction."
+    },
+    {
+      "case_id": "CASE-0004",
+      "source_id": "EV-0013",
+      "text": "Simulated hour of day: 20 (step 260)."
+    },
+    {
+      "case_id": "CASE-0005",
+      "source_id": "EV-0014",
+      "text": "Transaction type: CASH_OUT."
+    },
+    {
+      "case_id": "CASE-0005",
+      "source_id": "EV-0015",
+      "text": "The amount (68546.26) is 120.3% of the origin account balance before the transaction (56987.00)."
+    },
+    {
+      "case_id": "CASE-0005",
+      "source_id": "EV-0016",
+      "text": "The origin account balance after the transaction is 0.00."
+    },
+    {
+      "case_id": "CASE-0005",
+      "source_id": "EV-0017",
+      "text": "The origin balance change (56987.00) differs from the amount (68546.26) by 11559.26."
+    },
+    {
+      "case_id": "CASE-0005",
+      "source_id": "EV-0018",
+      "text": "Simulated hour of day: 15 (step 375)."
+    },
+    {
+      "case_id": "CASE-0006",
+      "source_id": "EV-0019",
+      "text": "Transaction type: TRANSFER."
+    },
+    {
+      "case_id": "CASE-0006",
+      "source_id": "EV-0020",
+      "text": "The amount (798007.45) is 100.0% of the origin account balance before the transaction (798007.45)."
+    },
+    {
+      "case_id": "CASE-0006",
+      "source_id": "EV-0021",
+      "text": "The origin account balance after the transaction is 0.00."
+    },
+    {
+      "case_id": "CASE-0006",
+      "source_id": "EV-0022",
+      "text": "The destination account balance is recorded as 0.00 before and after the transaction."
+    },
+    {
+      "case_id": "CASE-0006",
+      "source_id": "EV-0023",
+      "text": "Simulated hour of day: 21 (step 165)."
+    },
+    {
+      "case_id": "CASE-0007",
+      "source_id": "EV-0024",
+      "text": "Transaction type: CASH_OUT."
+    },
+    {
+      "case_id": "CASE-0007",
+      "source_id": "EV-0025",
+      "text": "The amount (69218.62) is 99.6% of the origin account balance before the transaction (69493.00)."
+    },
+    {
+      "case_id": "CASE-0007",
+      "source_id": "EV-0026",
+      "text": "Simulated hour of day: 20 (step 500)."
+    },
+    {
+      "case_id": "CASE-0008",
+      "source_id": "EV-0027",
+      "text": "Transaction type: CASH_OUT."
+    },
+    {
+      "case_id": "CASE-0008",
+      "source_id": "EV-0028",
+      "text": "The amount (10508.14) is 50.4% of the origin account balance before the transaction (20860.00)."
+    },
+    {
+      "case_id": "CASE-0008",
+      "source_id": "EV-0029",
+      "text": "Simulated hour of day: 0 (step 96)."
+    },
+    {
+      "case_id": "CASE-0009",
+      "source_id": "EV-0030",
+      "text": "Transaction type: CASH_OUT."
+    },
+    {
+      "case_id": "CASE-0009",
+      "source_id": "EV-0031",
+      "text": "The amount (257811.92) is 100.0% of the origin account balance before the transaction (257811.92)."
+    },
+    {
+      "case_id": "CASE-0009",
+      "source_id": "EV-0032",
+      "text": "The origin account balance after the transaction is 0.00."
+    },
+    {
+      "case_id": "CASE-0009",
+      "source_id": "EV-0033",
+      "text": "Simulated hour of day: 22 (step 694)."
+    },
+    {
+      "case_id": "CASE-0010",
+      "source_id": "EV-0034",
+      "text": "Transaction type: CASH_OUT."
+    },
+    {
+      "case_id": "CASE-0010",
+      "source_id": "EV-0035",
+      "text": "The amount (294822.73) is 97.0% of the origin account balance before the transaction (304029.00)."
+    },
+    {
+      "case_id": "CASE-0010",
+      "source_id": "EV-0036",
+      "text": "Simulated hour of day: 13 (step 13)."
+    }
+  ],
+  "generated_by": "scripts/build_demo_cases.py",
+  "seed": 42
+}

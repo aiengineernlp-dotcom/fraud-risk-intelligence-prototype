@@ -12,8 +12,12 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import numpy as np
+
+from src.data.case_input import parse_case_input
+from src.storage.evidence_repository import get_evidence
 
 from scripts import build_demo_cases
 
@@ -54,3 +58,24 @@ def test_built_demo_files_have_one_injected_note_only(small_paysim_csv):
     notes = [case["case_note"] for case in cases_doc["cases"]]
     assert notes.count(build_demo_cases.TRAP_NOTE) == 1
     assert "EV-9999" not in json.dumps(evidence_doc)  # the note cites a source that does not exist
+
+
+# --- The versioned demo files themselves (n° 38): checked in CI, where there is no model ---------
+
+DEMO_DIR = Path(__file__).resolve().parent.parent / "data" / "demo"
+
+
+def test_demo_files_have_no_label():
+    for name in ("cases.json", "evidence_store.json"):
+        assert_no_label_nor_identifier((DEMO_DIR / name).read_text(encoding="utf-8"))
+
+
+def test_demo_files_are_consistent():
+    cases = json.loads((DEMO_DIR / "cases.json").read_text(encoding="utf-8"))["cases"]
+    store = DEMO_DIR / "evidence_store.json"
+    case_ids = [parse_case_input(case).case_id for case in cases]  # every case is a valid input
+    assert len(case_ids) == 10 and len(set(case_ids)) == 10  # founder decision (a)
+    assert [c["case_note"] for c in cases].count(build_demo_cases.TRAP_NOTE) == 1  # decision (c)
+    without_evidence = [cid for cid in case_ids if get_evidence(store, cid) == []]
+    assert len(without_evidence) == 1  # decision (d); get_evidence also checks unique EV- IDs
+    assert "EV-9999" not in store.read_text(encoding="utf-8")
