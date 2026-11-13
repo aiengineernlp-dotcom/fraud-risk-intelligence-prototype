@@ -1,7 +1,8 @@
 """
 SoC layer      : Tests
 Responsibility : Test the bounded retries (retry.py, n° 62) and the review routing policy
-                 (routing_policy.py, n° 54) — the orchestrator itself (n° 63) comes at PR 10
+                 (routing_policy.py, n° 54) (PR 9); the orchestrator (n° 63) and its use of the
+                 update_case tool (PR 10)
 Never does     : Open a network connection; call a real LLM; read .env or call load_config()
                  (the retry values are read from configs/settings.yaml with yaml.safe_load);
                  sleep (a simulated clock measures the attempts)
@@ -47,6 +48,12 @@ from src.audit.audit_repository import list_events
 from src.config import RetrySettings
 from src.models.risk_bands import risk_band
 from src.storage.case_repository import create_case, utc_now
+import json
+from src.agent import orchestrator
+from src.agent.prompt_builder import PROMPT_VERSION
+from src.agent.state_machine import InvalidTransitionError
+from src.agent.tools import update_case
+from src.config import AppConfig, LLMSettings, Paths, Secret, SplitSettings
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETTINGS_PATH = REPO_ROOT / "configs" / "settings.yaml"
@@ -454,3 +461,313 @@ def test_routing_policy_layer_rules():
             modules.add(node.module)
     forbidden = ("src.agent.llm", "openai", "streamlit", "src.config", "os", "yaml")
     assert not [m for m in modules if any(m == f or m.startswith(f + ".") for f in forbidden)]
+
+
+# === Orchestrator (n° 63, PR 10) ====================================================================
+ORCH_CASE = "CASE-0001"
+ORCH_EVIDENCE = [
+    {"case_id": ORCH_CASE, "source_id": "EV-0001", "text": "Transaction type: TRANSFER."},
+    {"case_id": ORCH_CASE, "source_id": "EV-0002", "text": "The origin account is emptied."},
+]
+ORCHESTRATOR_SOURCE = REPO_ROOT / "src" / "agent" / "orchestrator.py"
+# Tools that write: never inside run_with_retries (decision PR 9, risk 1; Q-28).
+WRITING_TOOL_NAMES = {"write_audit_event", "_write_event", "intake_case", "update_case",
+                      "transition_case", "save_step", "set_case_priority", "apply_transition"}
+
+
+def _raw_case(case_id=ORCH_CASE, **changes):
+    """A valid case input with invented values (no label, no identifier)."""
+    raw = {"case_id": case_id, "step": 1, "type": "TRANSFER", "amount": 181.0,
+           "oldbalanceOrg": 181.0, "newbalanceOrig": 0.0, "oldbalanceDest": 0.0,
+           "newbalanceDest": 0.0, "case_note": "Synthetic note."}
+    raw.update(changes)
+    return raw
+
+
+@pytest.fixture
+def orch_config(tmp_path, tool_settings, llm_settings) -> AppConfig:
+    """AppConfig built by hand (never load_config()); values from settings.yaml, files in tmp_path."""
+    store = tmp_path / "evidence_store.json"
+    store.write_text(json.dumps({"evidence": ORCH_EVIDENCE}), encoding="utf-8")
+    paths = Paths(
+        raw_data_dir=tmp_path, runtime_db=tmp_path / "unused.db", demo_cases=tmp_path / "unused.json",
+        evidence_store=store, model_pipeline=tmp_path / "unused.joblib", mlp_state=tmp_path / "unused.pt",
+        model_metadata=tmp_path / "unused_meta.json", metrics_dir=tmp_path, figures_dir=tmp_path,
+        prohibited_terms=TERMS_PATH,
+    )
+    routing = _settings_yaml()["routing"]
+    return AppConfig(
+        tool_retries=tool_settings, llm_retries=llm_settings,
+        near_threshold_margin=routing["near_threshold_margin"],
+        review_capacity_per_day=routing["review_capacity_per_day"],
+        split=SplitSettings(seed=42, val_size=0.15, test_size=0.15), paths=paths,
+        llm=LLMSettings(provider="fake", base_url="", model="", api_key=Secret("")),
+    )
+
+
+class _FakeMaker:
+    """make_llm_client for the tests: one FakeLLMClient per case, built from the official facts."""
+
+    def __init__(self, scenario="valid"):
+        self.scenario = scenario
+        self.clients = []
+
+    def __call__(self, case_id, score, evidence):
+        client = FakeLLMClient(self.scenario, DraftFacts.from_official(case_id, score, evidence))
+        self.clients.append(client)
+        return client
+
+    @property
+    def calls(self):
+        return sum(client.calls for client in self.clients)
+
+
+class _Clock:
+    """A simulated monotonic clock: `tick` seconds pass at each reading (no sleep)."""
+
+    def __init__(self, tick=0.0):
+        self.now, self.tick = 0.0, tick
+
+    def __call__(self):
+        self.now += self.tick
+        return self.now
+
+
+def _run(conn, config, model, maker=None, raw=None, clock=None):
+    return orchestrator.run_case(
+        raw if raw is not None else _raw_case(), conn=conn, config=config, scoring_model=model,
+        make_llm_client=maker if maker is not None else _FakeMaker(), clock=clock or _Clock(),
+    )
+
+
+def _events(conn, case_id=ORCH_CASE):
+    return [stored.event for stored in list_events(conn, case_id)]
+
+
+def _transitions(conn, case_id=ORCH_CASE):
+    return [(e.state_from, e.state_to) for e in _events(conn, case_id) if e.action == "transition"]
+
+
+NORMAL_PATH = [
+    (None, CaseState.RECEIVED),
+    (CaseState.RECEIVED, CaseState.SCORED),
+    (CaseState.SCORED, CaseState.EVIDENCE_READY),
+    (CaseState.EVIDENCE_READY, CaseState.DRAFTED),
+    (CaseState.DRAFTED, CaseState.VALIDATED),
+    (CaseState.VALIDATED, CaseState.HUMAN_REVIEW),
+]
+
+
+@pytest.mark.validation_workflow
+def test_normal_case_reaches_human_review(db_conn, orch_config, scoring_model):
+    """G03: a normal case goes through the states in the order of §11.3; the audit keeps each step."""
+    outcome = _run(db_conn, orch_config, scoring_model)
+    assert outcome.state is CaseState.HUMAN_REVIEW
+    assert _transitions(db_conn) == NORMAL_PATH
+    events = {e.state_to: e for e in _events(db_conn) if e.action == "transition"}
+    assert events[CaseState.SCORED].model_version == outcome.score.model_version
+    assert events[CaseState.DRAFTED].prompt_version == PROMPT_VERSION
+    assert events[CaseState.DRAFTED].actor == "llm"
+    assert events[CaseState.VALIDATED].actor == "validator"
+    assert outcome.draft is not None and outcome.priority in PRIORITIES
+    assert update_case.get_case(db_conn, ORCH_CASE).priority == outcome.priority
+    assert [e.result for e in _events(db_conn) if e.action == "tool_call"] == [RESULT_OK] * 3
+
+
+@pytest.mark.validation_workflow
+def test_rejected_after_bounded_retries(db_conn, orch_config, scoring_model, llm_settings):
+    """H06, Flux 2a: every draft rejected -> VALIDATION_REJECTED after 1 + N attempts, no draft kept."""
+    maker = _FakeMaker("score_mismatch")
+    outcome = _run(db_conn, orch_config, scoring_model, maker)
+    expected_attempts = 1 + llm_settings.max_retries
+    assert outcome.state is CaseState.VALIDATION_REJECTED
+    assert maker.calls == expected_attempts
+    assert outcome.draft is None and outcome.validation_reasons
+    assert update_case.get_step(db_conn, ORCH_CASE, orchestrator.STEP_DRAFT) is None
+    assert _transitions(db_conn)[-2:] == [
+        (CaseState.EVIDENCE_READY, CaseState.DRAFTED),
+        (CaseState.DRAFTED, CaseState.VALIDATION_REJECTED),
+    ]
+    llm_attempts = [e for e in _events(db_conn) if e.action == "tool_call" and e.actor == "llm"]
+    assert [e.result for e in llm_attempts] == [RESULT_REJECTED] * expected_attempts
+    assert update_case.get_case(db_conn, ORCH_CASE).priority is None
+
+
+def test_tool_timeout_leads_to_failed(db_conn, orch_config, scoring_model, tool_settings, monkeypatch):
+    """Flux 2b: the evidence tool answers too late every time -> FAILED, bounded, cause logged."""
+    clock = _Clock()
+
+    def slow_evidence(store_path, case_id):
+        clock.now += tool_settings.timeout_seconds + 1  # later than the delay of settings.yaml
+        return []
+
+    monkeypatch.setattr(orchestrator, "retrieve_case_evidence", slow_evidence)
+    outcome = _run(db_conn, orch_config, scoring_model, clock=clock)
+    assert outcome.state is CaseState.FAILED
+    assert outcome.failure_cause == {"step": "evidence", "cause": "retrieve_case_evidence:timeout"}
+    attempts = [e for e in _events(db_conn) if e.actor == "tool:retrieve_case_evidence"
+                and e.action == "tool_call"]
+    assert [e.result for e in attempts] == [RESULT_TIMEOUT] * (1 + tool_settings.max_retries)
+    last = _events(db_conn)[-1]
+    assert (last.state_from, last.state_to, last.result) == (
+        CaseState.SCORED, CaseState.FAILED, RESULT_TIMEOUT)
+    assert update_case.get_step(db_conn, ORCH_CASE, orchestrator.STEP_EVIDENCE) is None
+
+
+def test_tool_unavailable_leads_to_failed(db_conn, orch_config, scoring_model, tool_settings, monkeypatch):
+    from src.agent.tools.errors import ToolUnavailableError as Unavailable
+
+    def broken(model, case_input):
+        raise Unavailable("down")
+
+    monkeypatch.setattr(orchestrator, "score_transaction", broken)
+    outcome = _run(db_conn, orch_config, scoring_model)
+    assert outcome.state is CaseState.FAILED and outcome.score is None
+    assert outcome.failure_cause == {"step": "score", "cause": "score_transaction:failed"}
+    assert _transitions(db_conn)[-1] == (CaseState.RECEIVED, CaseState.FAILED)
+
+
+def test_llm_timeout_leads_to_failed(db_conn, orch_config, scoring_model, llm_settings):
+    maker = _FakeMaker("timeout")
+    outcome = _run(db_conn, orch_config, scoring_model, maker)
+    assert outcome.state is CaseState.FAILED and outcome.draft is None
+    assert maker.calls == 1 + llm_settings.max_retries
+    assert outcome.failure_cause == {"step": "draft", "cause": "llm:timeout"}
+    assert _transitions(db_conn)[-1] == (CaseState.EVIDENCE_READY, CaseState.FAILED)
+
+
+def test_llm_auth_leads_to_failed_without_retry(db_conn, orch_config, scoring_model):
+    class AuthRefused(_FakeMaker):
+        def __call__(self, case_id, score, evidence):
+            client = super().__call__(case_id, score, evidence)
+
+            def refuse(messages):
+                client.calls += 1
+                raise LLMUnavailable("refused", kind="auth", status_code=401)
+            client.complete = refuse
+            return client
+
+    maker = AuthRefused()
+    outcome = _run(db_conn, orch_config, scoring_model, maker)
+    assert outcome.state is CaseState.FAILED and maker.calls == 1
+    assert outcome.failure_cause == {"step": "draft", "cause": "llm:auth"}
+
+
+@pytest.mark.validation_workflow
+@pytest.mark.parametrize("band, score_value, evidence, expected_priority, expected_info", [
+    ("high", 0.95, ORCH_EVIDENCE, PRIORITY_HIGH, False),
+    ("low", 0.01, ORCH_EVIDENCE, PRIORITY_NORMAL, False),
+    ("low", 0.01, [], PRIORITY_NORMAL, True),
+])
+def test_validated_always_goes_to_review(db_conn, orch_config, scoring_model, monkeypatch,
+                                         band, score_value, evidence, expected_priority, expected_info):
+    """G11, §11.6: whatever the band or the evidence, a VALIDATED case goes to HUMAN_REVIEW."""
+    official = ScoreResult(score=score_value, threshold=0.3, risk_band=band, model_version="test@1")
+    monkeypatch.setattr(orchestrator, "score_transaction", lambda model, case_input: official)
+    orch_config.paths.evidence_store.write_text(json.dumps({"evidence": evidence}), encoding="utf-8")
+    outcome = _run(db_conn, orch_config, scoring_model)
+    assert outcome.state is CaseState.HUMAN_REVIEW
+    assert _transitions(db_conn)[-2:] == NORMAL_PATH[-2:]
+    assert outcome.priority == expected_priority
+    assert outcome.request_information is expected_info
+    review = _events(db_conn)[-1]
+    assert review.details["priority"] == expected_priority
+    assert review.details["request_information"] is expected_info
+
+
+def test_idempotent_step(db_conn, orch_config, scoring_model, monkeypatch):
+    """G10: submitting the same case twice creates no second score, no second draft."""
+    scored = []
+    real_score = orchestrator.score_transaction
+
+    def spy(model, case_input):
+        scored.append(case_input.case_id)
+        return real_score(model, case_input)
+
+    monkeypatch.setattr(orchestrator, "score_transaction", spy)
+    maker = _FakeMaker()
+    first = _run(db_conn, orch_config, scoring_model, maker)
+    events_after_first = len(_events(db_conn))
+    second = _run(db_conn, orch_config, scoring_model, maker)
+    assert scored == [ORCH_CASE] and maker.calls == 1
+    assert second == first
+    assert len(_events(db_conn)) == events_after_first
+
+
+def test_interrupted_case_resumes_without_redoing_stored_steps(db_conn, orch_config, scoring_model,
+                                                                monkeypatch):
+    """G10: a case stopped after the score resumes at the evidence step; the score is not redone."""
+    from src.agent.tools.score_transaction import score_transaction as real_score
+
+    intake = _raw_case()
+    from src.agent.tools.intake_case import intake_case
+    intake_case(db_conn, intake)
+    score = real_score(scoring_model, orchestrator._case_input_of(update_case.get_case(db_conn, ORCH_CASE)))
+    update_case.save_step(db_conn, ORCH_CASE, "score", orchestrator._score_to_dict(score), 1)
+    update_case.transition_case(db_conn, ORCH_CASE, CaseState.SCORED)
+
+    def never(model, case_input):
+        raise AssertionError("the score must not be computed again")
+
+    monkeypatch.setattr(orchestrator, "score_transaction", never)
+    outcome = _run(db_conn, orch_config, scoring_model, raw=intake)
+    assert outcome.state is CaseState.HUMAN_REVIEW and outcome.score == score
+
+
+def test_invalid_transition_audited(db_conn, orch_config, scoring_model):
+    """Q-05, G02: a refused jump is not applied AND leaves an "invalid_transition" event."""
+    from src.agent.tools.intake_case import intake_case
+    intake_case(db_conn, _raw_case())
+    with pytest.raises(InvalidTransitionError):
+        orchestrator.apply_transition(db_conn, ORCH_CASE, CaseState.VALIDATED, actor="system")
+    assert update_case.get_case(db_conn, ORCH_CASE).state is CaseState.RECEIVED
+    event = _events(db_conn)[-1]
+    assert (event.action, event.result, event.state_from, event.state_to) == (
+        "invalid_transition", RESULT_FAILED, CaseState.RECEIVED, CaseState.VALIDATED)
+
+
+def test_invalid_input_creates_nothing(db_conn, orch_config, scoring_model):
+    with pytest.raises(ToolInputError):
+        _run(db_conn, orch_config, scoring_model, raw=_raw_case(isFraud=1))
+    assert update_case.get_case(db_conn, ORCH_CASE) is None
+
+
+def test_orchestrator_never_touches_the_database():
+    """Architecture §5, Q-28: the orchestrator imports no storage module, no sqlite3, no audit repo."""
+    modules = set()
+    for node in ast.walk(ast.parse(ORCHESTRATOR_SOURCE.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            modules |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    forbidden = ("src.storage", "src.audit", "sqlite3")
+    assert not [m for m in modules if any(m == f or m.startswith(f + ".") for f in forbidden)]
+
+
+def test_retry_never_wraps_writing_tools():
+    """Decision PR 9 (risk 1): no writing tool inside what run_with_retries retries.
+
+    Scanned: the `call` and `check` given to run_with_retries, the `call` given to _run_tool_step
+    (which passes it on to run_with_retries), and the body of any local function named there.
+    """
+    tree = ast.parse(ORCHESTRATOR_SOURCE.read_text(encoding="utf-8"))
+    local_defs = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    # Position of the retried callable: run_with_retries(step, call, ...),
+    # _run_tool_step(conn, case_id, step, tool_name, call, ...).
+    call_position = {"run_with_retries": 1, "_run_tool_step": 4}
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and getattr(node.func, "id", None) in call_position]
+    assert {getattr(c.func, "id") for c in calls} == set(call_position), "scan found nothing"
+    for call in calls:
+        position = call_position[call.func.id]
+        wrapped = [call.args[position]] if len(call.args) > position else []
+        # The `audit=` callback writes on purpose (one event per attempt, never retried itself).
+        wrapped += [kw.value for kw in call.keywords if kw.arg in ("call", "check")]
+        for part in wrapped:
+            nodes = list(ast.walk(part))
+            for name in [n.id for n in nodes if isinstance(n, ast.Name)]:
+                if name in local_defs and name not in call_position and name != "_run_tool_step":
+                    nodes += list(ast.walk(local_defs[name]))
+            names = {n.id for n in nodes if isinstance(n, ast.Name)}
+            names |= {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+            assert not names & WRITING_TOOL_NAMES, (call.func.id, names & WRITING_TOOL_NAMES)
