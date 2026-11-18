@@ -1,4 +1,4 @@
-> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Features_Complet.md, version du 2026-10-20. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
+> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Features_Complet.md, version du 2026-11-18. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
 
 # FEATURES COMPLET — Capstone_Project_1
 
@@ -6,7 +6,7 @@
 > énoncé `Capstone_Project_1_Project_Brief.docx` (18 octobre 2026) ; gabarit `10_Template_Features_Complet.md` v1 · système v2.3.4
 > · Contrôle indépendant : aucun · Date : 2026-10-19
 >
-> Version : **v1.0** — **VALIDÉ par Erman le 2026-10-20** · Version précédente : v0.1 (même contenu, statut EN COURS)
+> Version : **v1.1** (2026-11-18) — F04 : la note du cas entre dans le contexte, seulement dans la section de données, marquée non fiable (décision d'Erman I55, PR 8 du J4 ; oubli de la liste v1.0, relevé par l'agent) · v1.0 **VALIDÉ par Erman le 2026-10-20** · Version précédente : v0.1 (même contenu, statut EN COURS)
 > Confidentialité : **Document INTERNE** — jamais rendu (langue de travail : français ; les noms techniques restent en anglais)
 
 > Rôle : document [2] du rituel — « ce qu'on construit ». Source de vérité pour **les fonctionnalités**.
@@ -89,7 +89,7 @@
 | F01 | Client LLM derrière une interface remplaçable (hébergé ou local — choix dans `Architecture_Projet.md`), avec délai maximal | P1 | J4 | DM §9, Q10 ; R198, R203 | Non | Constructeur | ✅ (fournisseur, modèle, délai) | Changer de fournisseur ne touche qu'un fichier de configuration et une implémentation. |
 | F02 | Faux client LLM pour les tests (réponses écrites à l'avance : valide, mal formée, avec allégation, avec mauvais score…) | P1 | J4 | R203, R301 | Non | Constructeur | — | Toute la suite de tests passe sans réseau. |
 | F03 | Gabarit de prompt versionné : instructions système fixes, section de données séparée | P1 | J4 | R183, R186 | Non | Constructeur | ✅ (version du gabarit) | La version du gabarit est enregistrée dans chaque événement d'audit de rédaction. |
-| F04 | Contexte minimal : ID du cas, score officiel et bande, variables vérifiées, preuves approuvées, version du modèle | P1 | J4 | R181, R185 | Non | Constructeur | ✅ (liste de champs) | Le prompt ne contient aucun champ hors de la liste autorisée (test). |
+| F04 | Contexte minimal : ID du cas, score officiel et bande, variables vérifiées, preuves approuvées, version du modèle, **note du cas — seulement dans la section de données du message `user`, délimitée et marquée non fiable** (v1.1, I55) | P1 | J4 | R181, R185 | Non | Constructeur | ✅ (liste de champs) | Le prompt ne contient aucun champ hors de la liste autorisée (test). |
 | F05 | Notes de cas traitées comme des données non fiables (protection contre l'injection de prompt) | P1 | J4 | R184, R196, R242 | K03 | Constructeur | — | Une note piégée ne change ni le score, ni la structure, ni l'issue de la validation (test). |
 | F06 | Sortie JSON structurée (les 10 champs de §10.2, extensible) | P1 | J4 | R182, R187 | Non | Relecteur | — | Le brouillon contient les 10 champs, sinon il est rejeté par H01. |
 | F07 | Preuves insuffisantes → incertitude écrite + recommandation de revue humaine | P1 | J4 | R197 | Non | Relecteur | — | Un cas sans preuve produit au moins une incertitude et une étape de revue recommandée. |

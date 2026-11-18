@@ -46,3 +46,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# --- Claude Code local settings, never shared (Q-04) ---------------------------
+.claude/settings.local.json
