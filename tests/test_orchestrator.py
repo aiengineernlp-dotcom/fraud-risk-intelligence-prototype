@@ -971,3 +971,13 @@ def test_read_api_calls_no_writing_function():
         todo += [n for n in found if n in local_defs]
     assert {"_outcome", "_queue_key"} <= seen  # the helpers really are followed
     assert not names & READ_API_FORBIDDEN, names & READ_API_FORBIDDEN
+
+
+def test_case_view_never_shows_draft_outside_review(db_conn, orch_config, scoring_model):
+    """A stored draft is shown only in human review or later (_outcome, brief §11.6), also in the view."""
+    _run(db_conn, orch_config, scoring_model)  # HUMAN_REVIEW: a validated draft is stored
+    update_case.transition_case(db_conn, ORCH_CASE, CaseState.FAILED)  # setup: HUMAN_REVIEW -> FAILED
+    assert update_case.get_step(db_conn, ORCH_CASE, orchestrator.STEP_DRAFT) is not None
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    assert view.outcome.state is CaseState.FAILED
+    assert view.outcome.draft is None
