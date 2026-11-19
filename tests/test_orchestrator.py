@@ -1194,3 +1194,18 @@ def test_review_api_never_retries():
 def test_record_review_decision_never_uses_failed():
     """I71 (1): record_review_decision never moves a case to FAILED."""
     assert not _function_names("record_review_decision") & {"FAILED", "apply_transition"}
+
+
+@pytest.mark.parametrize("no_comment", [None, "   "])
+def test_record_review_decision_without_comment_length_zero(db_conn, orch_config, scoring_model,
+                                                            no_comment):
+    """I71 (c2), Q-39: no comment (None, or spaces only) -> ONE review_decision event with
+    details == {"comment_length": 0}, and reviewer_comment NULL in cases."""
+    before = _in_review(db_conn, orch_config, scoring_model)
+    orchestrator.record_review_decision(ORCH_CASE, CaseState.NEEDS_MORE_INFORMATION, no_comment,
+                                        conn=db_conn, config=orch_config)
+    new = _events(db_conn)[before:]
+    assert [(e.action, e.details) for e in new] == [("review_decision", {"comment_length": 0})]
+    row = db_conn.execute("SELECT reviewer_comment FROM cases WHERE case_id = ?",
+                          (ORCH_CASE,)).fetchone()
+    assert row["reviewer_comment"] is None
