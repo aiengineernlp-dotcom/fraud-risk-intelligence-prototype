@@ -4,22 +4,42 @@ Responsibility : Test the storage layer and the audit trail: tables and constrai
                  append-only audit, duplicate submission, step idempotency (started at J4, PR 3;
                  the review decision, the validation view and the export are added at J5)
 Never does     : Use data/runtime/ (temporary database from tmp_path only); call the network or an LLM
-Reference      : Architecture_Projet.md v1.3 — section 8 (n° 70, tests of n° 33, 34, 35),
-                 section 10.2, D-07; Features_Complet.md G10; PASSATION.md §6, decisions PR 3
+Reference      : Architecture_Projet.md v1.4 — section 8 (n° 70, tests of n° 33, 34, 35, 65),
+                 section 10.2, D-07; Features_Complet.md G10, I02; PASSATION.md §6, decisions PR 3, I64
 """
 
 from __future__ import annotations
 
+import ast
+import csv
+import io
+import json
+import math
 import sqlite3
+from pathlib import Path
 
 import pytest
+import yaml
 
 from src.agent.domain import REVIEWER_OUTCOMES, AuditEvent, CaseState
 from src.agent.routing_policy import PRIORITIES
 from src.audit import audit_repository
-from src.audit.audit_repository import SecretInAuditError, append_event, list_events
+from src.audit.audit_export import (
+    EXPORT_COLUMNS,
+    LABEL_KEYS,
+    AuditExportError,
+    export_audit,
+)
+from src.audit.audit_repository import (
+    SecretInAuditError,
+    append_event,
+    list_all_events,
+    list_events,
+    secret_keys_in,
+)
 from src.storage.case_repository import (
     ALLOWED_PRIORITIES,
+    LABEL_COLUMNS,
     CaseNotFoundError,
     DuplicateCaseError,
     InvalidPriorityError,
@@ -383,3 +403,350 @@ def test_set_priority_touches_one_case(db_conn):
     set_priority(db_conn, "CASE-1", "high")
     assert get_case(db_conn, "CASE-1").priority == "high"
     assert get_case(db_conn, "CASE-2") == other
+
+
+# --- list_all_events and secret_keys_in (J5, PR 11, decision I64) — read-only additions to n° 35 ---
+
+
+def _sql_statements(conn: sqlite3.Connection, action) -> list[str]:
+    """Run `action` and return every SQL statement sent to the database meanwhile."""
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        action()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def test_list_all_events_empty(db_conn):
+    assert list_all_events(db_conn) == []
+
+
+def test_list_all_events_all_cases_in_order(db_conn):
+    for case_id in ("CASE-1", "CASE-2", "CASE-3"):
+        create_case(db_conn, case_id, CaseState.RECEIVED, TRANSACTION)
+    written = [_event(c) for c in ("CASE-2", "CASE-1", "CASE-3", "CASE-1", "CASE-2")]
+    ids = [append_event(db_conn, e) for e in written]
+
+    stored = list_all_events(db_conn)
+    assert [s.event_id for s in stored] == ids == sorted(ids)  # every case, by event_id
+    assert [s.event for s in stored] == written  # every field round-trips
+
+
+def test_list_all_events_reads_only(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event())
+    before = db_conn.total_changes
+    statements = _sql_statements(db_conn, lambda: list_all_events(db_conn))
+    assert db_conn.total_changes == before
+    assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+
+
+@pytest.mark.parametrize(
+    ("details", "paths"),
+    [
+        ({"api_key": "x", "attempt": 1}, ["api_key"]),
+        ({"request": {"headers": {"auth_token": "x"}}}, ["request.headers.auth_token"]),
+        ({"calls": [{"ok": 1}, {"token": "x"}]}, ["calls[1].token"]),
+    ],
+)
+def test_secret_keys_in_matches_append_refusal(db_conn, details, paths):
+    """The export uses secret_keys_in: it must find the very paths append_event refuses."""
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    assert secret_keys_in(details) == paths
+    with pytest.raises(SecretInAuditError) as refused:
+        append_event(db_conn, _event(details=details))
+    assert str(paths) in str(refused.value)
+    assert secret_keys_in({"prompt_tokens": 1, "idempotency_key": "CASE-1:draft"}) == []
+
+
+# --- audit_export.py (n° 65, J5, PR 11 — I02, decision I64) ----------------------------------------
+# Reads through audit_repository only, never writes; same number of lines as the events read.
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+EXPORT_SOURCE = REPO_ROOT / "src" / "audit" / "audit_export.py"
+# An invented value: it must never show in an export nor in an error message.
+INVENTED_SECRET = "sk-test-INVENTED-0000000000000000"
+
+
+def _csv_rows(text: str) -> list[list[str]]:
+    """Parse the CSV text (never splitlines(): a quoted cell may hold a line break)."""
+    return list(csv.reader(io.StringIO(text)))
+
+
+def _exported_ids(conn, fmt: str, case_id=None) -> list[int]:
+    text = export_audit(conn, fmt, case_id)
+    if fmt == "csv":
+        return [int(row[0]) for row in _csv_rows(text)[1:]]
+    return [record["event_id"] for record in json.loads(text)]
+
+
+def _three_cases(conn) -> None:
+    for case_id in ("CASE-1", "CASE-2", "CASE-3"):
+        create_case(conn, case_id, CaseState.RECEIVED, TRANSACTION)
+    for case_id in ("CASE-2", "CASE-1", "CASE-3", "CASE-1", "CASE-2", "CASE-1"):
+        append_event(conn, _event(case_id))
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_audit_export_empty(db_conn, fmt):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    for case_id in ("CASE-1", "UNKNOWN", None):  # case without events, unknown case, empty base
+        text = export_audit(db_conn, fmt, case_id)
+        if fmt == "csv":
+            assert _csv_rows(text) == [list(EXPORT_COLUMNS)]  # header only
+        else:
+            assert json.loads(text) == []
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_audit_export(db_conn, fmt):
+    """Registry n° 65: the export of one case has as many lines as the events read."""
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    for _ in range(4):
+        append_event(db_conn, _event())
+    read = list_events(db_conn, "CASE-1")
+    assert _exported_ids(db_conn, fmt, "CASE-1") == [s.event_id for s in read]
+    text = export_audit(db_conn, fmt, "CASE-1")
+    count = len(_csv_rows(text)) - 1 if fmt == "csv" else len(json.loads(text))
+    assert count == len(read) == 4
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_audit_export_all_cases_in_order(db_conn, fmt):
+    _three_cases(db_conn)
+    ids = _exported_ids(db_conn, fmt)
+    assert ids == [s.event_id for s in list_all_events(db_conn)]
+    assert len(ids) == 6 and all(a < b for a, b in zip(ids, ids[1:]))  # strictly increasing
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_audit_export_one_case_among_many(db_conn, fmt):
+    _three_cases(db_conn)
+    assert _exported_ids(db_conn, fmt, "CASE-1") == [s.event_id for s in list_events(db_conn, "CASE-1")]
+    assert len(_exported_ids(db_conn, fmt, "CASE-1")) == 3
+
+
+def test_audit_export_columns(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event())
+    assert _csv_rows(export_audit(db_conn, "csv"))[0] == list(EXPORT_COLUMNS)
+    record = json.loads(export_audit(db_conn, "json"))[0]
+    assert list(record) == list(EXPORT_COLUMNS)
+    assert record["state_from"] == "RECEIVED" and record["state_to"] == "SCORED"
+    assert record["model_version"] == "rf-v1" and record["prompt_version"] is None
+
+
+def test_audit_export_details_absent(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event(details=None, state_from=None, state_to=None))
+    row = dict(zip(EXPORT_COLUMNS, _csv_rows(export_audit(db_conn, "csv"))[1]))
+    assert row["details"] == "" and row["state_from"] == "" and row["prompt_version"] == ""
+    record = json.loads(export_audit(db_conn, "json"))[0]
+    assert record["details"] is None and record["state_from"] is None
+
+
+def test_audit_export_nested_details_round_trip(db_conn):
+    details = {"reasons": ["band_mismatch", "unsupported_evidence"],
+               "attempt": {"number": 2, "latency_ms": 12.5, "ok": False}, "note": "élevé"}
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event(details=details))
+    row = dict(zip(EXPORT_COLUMNS, _csv_rows(export_audit(db_conn, "csv"))[1]))
+    assert json.loads(row["details"]) == details  # one column, valid JSON text
+    assert json.loads(export_audit(db_conn, "json"))[0]["details"] == details
+
+
+def test_audit_export_comma_quote_line_break(db_conn):
+    tricky = 'tool:a,"b"\nc'
+    details = {"reason": 'x, "y"\nz'}
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event(actor=tricky, details=details))
+    append_event(db_conn, _event())
+    rows = _csv_rows(export_audit(db_conn, "csv"))
+    assert len(rows) == 3 and all(len(r) == len(EXPORT_COLUMNS) for r in rows)
+    row = dict(zip(EXPORT_COLUMNS, rows[1]))
+    assert row["actor"] == tricky and json.loads(row["details"]) == details
+    assert json.loads(export_audit(db_conn, "json"))[0]["actor"] == tricky
+
+
+def test_audit_export_formula_neutralised_in_csv_only(db_conn):
+    """Decision Q-A: a cell a spreadsheet could run gets "'" in front (CSV only)."""
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    for start in ("=", "+", "-", "@", "\t", "\r"):
+        append_event(db_conn, _event(actor=f"{start}1+1"))
+    append_event(db_conn, _event(actor="=1+1", details={"reason": "=1+1"}))
+    rows = [dict(zip(EXPORT_COLUMNS, r)) for r in _csv_rows(export_audit(db_conn, "csv"))[1:]]
+    assert [r["actor"][:2] for r in rows] == ["'=", "'+", "'-", "'@", "'\t", "'\r", "'="]
+    assert json.loads(rows[-1]["details"]) == {"reason": "=1+1"}  # inside JSON text: not a cell start
+    records = json.loads(export_audit(db_conn, "json"))
+    assert records[-1]["actor"] == "=1+1" and records[-1]["details"] == {"reason": "=1+1"}
+
+
+@pytest.mark.parametrize(
+    ("details", "path"),
+    [
+        ({"isFraud": 1}, "isFraud"),
+        ({"model": {"inputs": [{"isFlaggedFraud": 0}]}}, "model.inputs[0].isFlaggedFraud"),
+    ],
+)
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_audit_export_refuses_label(db_conn, details, path, fmt):
+    # append_event accepts a label key: the export is the only barrier (I64).
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    event_id = append_event(db_conn, _event(details=details))
+    with pytest.raises(AuditExportError) as refused:
+        export_audit(db_conn, fmt)
+    assert str(event_id) in str(refused.value) and path in str(refused.value)
+
+
+def _insert_event_raw(conn: sqlite3.Connection, details_json: str) -> int:
+    """Plain SQL insert that skips append_event's checks (an old or tampered row)."""
+    with conn:
+        cursor = conn.execute(
+            "INSERT INTO audit_events (case_id, timestamp, actor, action, result, details_json)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            ("CASE-1", NOW, "system", "tool_call", "ok", details_json),
+        )
+    return cursor.lastrowid
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_audit_export_refuses_secret_inserted_raw(db_conn, fmt):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event())
+    event_id = _insert_event_raw(db_conn, json.dumps({"call": {"api_key": INVENTED_SECRET}}))
+    with pytest.raises(AuditExportError) as refused:
+        export_audit(db_conn, fmt)
+    message = str(refused.value)
+    assert str(event_id) in message and "call.api_key" in message
+    assert INVENTED_SECRET not in message
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_secret_never_reaches_an_export(db_conn, fmt):
+    """Two barriers (append_event, then the export): the secret value is never exported."""
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    try:
+        append_event(db_conn, _event(details={"token": INVENTED_SECRET}))
+    except SecretInAuditError:
+        pass
+    try:
+        text = export_audit(db_conn, fmt)
+    except AuditExportError as refused:
+        text = str(refused)
+    assert INVENTED_SECRET not in text
+
+
+def test_audit_export_allows_token_counts(db_conn):
+    details = {"prompt_tokens": 120, "idempotency_key": "CASE-1:draft"}
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event(details=details))
+    assert json.loads(export_audit(db_conn, "json"))[0]["details"] == details
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_audit_export_refuses_non_finite(db_conn, fmt, bad):
+    """Decision Q-B: strict JSON; append_event stores NaN, the export refuses it."""
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    event_id = append_event(db_conn, _event(details={"attempt": {"latency_ms": bad}}))
+    with pytest.raises(AuditExportError) as refused:
+        export_audit(db_conn, fmt)
+    message = str(refused.value)
+    assert str(event_id) in message and "attempt.latency_ms" in message
+    assert "nan" not in message.lower() and "inf" not in message.lower()
+
+
+@pytest.mark.parametrize("fmt", ["xlsx", "CSV", "", None])
+def test_audit_export_unknown_format(db_conn, fmt):
+    with pytest.raises(AuditExportError):
+        export_audit(db_conn, fmt)
+
+
+def test_label_keys_match():
+    """The export keeps its own copy of the label names (registry n° 65): both must agree."""
+    assert LABEL_KEYS == LABEL_COLUMNS == frozenset({"isFraud", "isFlaggedFraud"})
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+@pytest.mark.parametrize("case_id", ["CASE-1", None])
+def test_audit_export_never_writes(db_conn, fmt, case_id):
+    """Decision Q-C: the export writes nothing, not even an audit event about itself."""
+    _three_cases(db_conn)
+    before_changes, before_events = db_conn.total_changes, len(list_all_events(db_conn))
+    statements = _sql_statements(db_conn, lambda: export_audit(db_conn, fmt, case_id))
+    assert db_conn.total_changes == before_changes
+    assert len(list_all_events(db_conn)) == before_events
+    assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+
+
+def test_audit_export_dependencies():
+    """Registry n° 65: audit_repository.py only (+ csv, io, json, math); no file, no direct SQL."""
+    tree = ast.parse(EXPORT_SOURCE.read_text(encoding="utf-8"))
+    modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.add(node.module)
+    assert modules == {"__future__", "csv", "io", "json", "math", "typing",
+                       "src.audit.audit_repository"}
+    forbidden_calls = {"open", "append_event", "execute", "executemany", "executescript",
+                       "write_text", "write_bytes", "commit"}
+    called = {
+        node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute))
+    }
+    assert not called & forbidden_calls
+
+
+# End to end: the audit written by a real run_case (fake LLM client, small test model).
+
+def test_audit_export_after_run_case(db_conn, tmp_path, scoring_model):
+    from src.agent import orchestrator
+    from src.agent.llm.fake_client import DraftFacts, FakeLLMClient
+    from src.config import AppConfig, LLMSettings, Paths, RetrySettings, Secret, SplitSettings
+
+    settings = yaml.safe_load((REPO_ROOT / "configs" / "settings.yaml").read_text(encoding="utf-8"))
+    tools, llm, routing = settings["retries"]["tools"], settings["retries"]["llm"], settings["routing"]
+    store = tmp_path / "evidence_store.json"
+    store.write_text(json.dumps({"evidence": [
+        {"case_id": "CASE-0900", "source_id": "EV-0001", "text": "Synthetic evidence."}]}),
+        encoding="utf-8")
+    unused = tmp_path / "unused"
+    config = AppConfig(
+        tool_retries=RetrySettings(max_retries=tools["max_retries"],
+                                   timeout_seconds=float(tools["timeout_seconds"])),
+        llm_retries=RetrySettings(max_retries=llm["max_retries_after_rejection"],
+                                  timeout_seconds=float(llm["timeout_seconds"])),
+        near_threshold_margin=routing["near_threshold_margin"],
+        review_capacity_per_day=routing["review_capacity_per_day"],
+        split=SplitSettings(seed=42, val_size=0.15, test_size=0.15),
+        paths=Paths(raw_data_dir=tmp_path, runtime_db=unused, demo_cases=unused,
+                    evidence_store=store, model_pipeline=unused, mlp_state=unused,
+                    model_metadata=unused, metrics_dir=tmp_path, figures_dir=tmp_path,
+                    prohibited_terms=REPO_ROOT / "configs" / "prohibited_terms.yaml"),
+        llm=LLMSettings(provider="fake", base_url="", model="", api_key=Secret("")),
+    )
+    raw = {"case_id": "CASE-0900", "step": 1, "type": "TRANSFER", "amount": 181.0,
+           "oldbalanceOrg": 181.0, "newbalanceOrig": 0.0, "oldbalanceDest": 0.0,
+           "newbalanceDest": 0.0, "case_note": "Synthetic note."}
+    outcome = orchestrator.run_case(
+        raw, conn=db_conn, config=config, scoring_model=scoring_model,
+        make_llm_client=lambda case_id, score, evidence: FakeLLMClient(
+            "valid", DraftFacts.from_official(case_id, score, evidence)),
+        clock=lambda: 0.0,
+    )
+    assert outcome.state is CaseState.HUMAN_REVIEW
+
+    read = list_events(db_conn, "CASE-0900")
+    assert len(read) > 5  # transitions and tool calls
+    rows = _csv_rows(export_audit(db_conn, "csv", "CASE-0900"))
+    records = json.loads(export_audit(db_conn, "json", "CASE-0900"))
+    assert len(rows) - 1 == len(records) == len(read)
+    assert [int(r[0]) for r in rows[1:]] == [rec["event_id"] for rec in records] == [
+        s.event_id for s in read]
+    for text in (export_audit(db_conn, "csv"), export_audit(db_conn, "json")):
+        assert not any(label in text for label in LABEL_KEYS)
