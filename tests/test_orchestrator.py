@@ -981,3 +981,231 @@ def test_case_view_never_shows_draft_outside_review(db_conn, orch_config, scorin
     view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
     assert view.outcome.state is CaseState.FAILED
     assert view.outcome.draft is None
+
+
+# --- write API for the UI (J05, J09, PR 13, decisions I71, Q-12, Q-19 (4)) ----------------------
+
+import dataclasses  # noqa: E402  (PR 13 tests only)
+import sqlite3  # noqa: E402
+import threading  # noqa: E402
+
+from src.storage import case_repository  # noqa: E402  (PR 13: simulated database failure)
+
+WRITE_API = ("start_app", "open_connection", "submit_case", "record_review_decision")
+
+
+def _in_review(conn, config, model):
+    outcome = _run(conn, config, model)
+    assert outcome.state is CaseState.HUMAN_REVIEW
+    return len(_events(conn))
+
+
+def test_record_review_decision_audits_once(db_conn, orch_config, scoring_model):
+    before = _in_review(db_conn, orch_config, scoring_model)
+    view = orchestrator.record_review_decision(
+        ORCH_CASE, CaseState.CLOSED, "abc", conn=db_conn, config=orch_config)
+    assert view.outcome.state is CaseState.CLOSED
+    new = _events(db_conn)[before:]
+    assert [(e.action, e.actor, e.result, e.state_from, e.state_to, e.details) for e in new] == [
+        ("review_decision", "reviewer", "ok", CaseState.HUMAN_REVIEW, CaseState.CLOSED,
+         {"comment_length": 3})]
+
+
+def test_record_review_decision_double_call_same_decision(db_conn, orch_config, scoring_model):
+    """J09: a double click records once; the second call writes nothing and returns the view."""
+    _in_review(db_conn, orch_config, scoring_model)
+    first = orchestrator.record_review_decision(
+        ORCH_CASE, CaseState.ESCALATED, "first", conn=db_conn, config=orch_config)
+    events, stored = _events(db_conn), update_case.get_case(db_conn, ORCH_CASE)
+    second = orchestrator.record_review_decision(
+        ORCH_CASE, CaseState.ESCALATED, "second", conn=db_conn, config=orch_config)
+    assert second == first
+    assert _events(db_conn) == events  # no second event
+    assert update_case.get_case(db_conn, ORCH_CASE) == stored  # first comment kept
+
+
+def test_record_review_decision_other_decision_refused_and_audited(db_conn, orch_config,
+                                                                   scoring_model):
+    _in_review(db_conn, orch_config, scoring_model)
+    orchestrator.record_review_decision(ORCH_CASE, CaseState.CLOSED, conn=db_conn,
+                                        config=orch_config)
+    stored, before = update_case.get_case(db_conn, ORCH_CASE), len(_events(db_conn))
+    with pytest.raises(orchestrator.ReviewAlreadyRecordedError) as caught:
+        orchestrator.record_review_decision(ORCH_CASE, CaseState.ESCALATED, conn=db_conn,
+                                            config=orch_config)
+    assert (caught.value.current, caught.value.requested) == (CaseState.CLOSED, CaseState.ESCALATED)
+    assert update_case.get_case(db_conn, ORCH_CASE) == stored
+    new = _events(db_conn)[before:]
+    assert [(e.action, e.actor, e.result, e.state_from, e.state_to) for e in new] == [
+        ("invalid_transition", "reviewer", "failed", CaseState.CLOSED, CaseState.ESCALATED)]
+
+
+@pytest.mark.parametrize("not_in_review", ["rejected", "failed"])
+def test_record_review_decision_case_not_in_review_refused(db_conn, orch_config, scoring_model,
+                                                           not_in_review):
+    if not_in_review == "rejected":
+        outcome = _run(db_conn, orch_config, scoring_model, maker=_FakeMaker("prohibited_claim"))
+        assert outcome.state is CaseState.VALIDATION_REJECTED
+    else:
+        _in_review(db_conn, orch_config, scoring_model)
+        update_case.transition_case(db_conn, ORCH_CASE, CaseState.FAILED)  # setup
+    current = update_case.get_case(db_conn, ORCH_CASE)
+    before = len(_events(db_conn))
+    with pytest.raises(orchestrator.ReviewAlreadyRecordedError):
+        orchestrator.record_review_decision(ORCH_CASE, CaseState.CLOSED, conn=db_conn,
+                                            config=orch_config)
+    assert update_case.get_case(db_conn, ORCH_CASE) == current
+    new = _events(db_conn)[before:]
+    assert [(e.action, e.actor, e.state_from, e.state_to) for e in new] == [
+        ("invalid_transition", "reviewer", current.state, CaseState.CLOSED)]
+
+
+@pytest.mark.parametrize("bad", [CaseState.FAILED, CaseState.HUMAN_REVIEW, "CLOSED"])
+def test_record_review_decision_failed_or_unknown_outcome_refused(db_conn, orch_config,
+                                                                  scoring_model, bad):
+    """I71 (1): a "decision" FAILED (or any state outside the 3) -> ToolInputError, nothing written."""
+    _in_review(db_conn, orch_config, scoring_model)
+    stored, events = update_case.get_case(db_conn, ORCH_CASE), _events(db_conn)
+    with pytest.raises(ToolInputError):
+        orchestrator.record_review_decision(ORCH_CASE, bad, conn=db_conn, config=orch_config)
+    assert update_case.get_case(db_conn, ORCH_CASE) == stored
+    assert _events(db_conn) == events
+
+
+def test_record_review_decision_database_down_keeps_human_review(db_conn, orch_config,
+                                                                 scoring_model, monkeypatch):
+    """I71 (1): the write fails -> ToolUnavailableError; case stays in HUMAN_REVIEW, no event,
+    never FAILED; the reviewer can try again."""
+    _in_review(db_conn, orch_config, scoring_model)
+    events = _events(db_conn)
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(case_repository, "set_review_decision", broken)
+    with pytest.raises(ToolUnavailableError):
+        orchestrator.record_review_decision(ORCH_CASE, CaseState.CLOSED, conn=db_conn,
+                                            config=orch_config)
+    assert update_case.get_case(db_conn, ORCH_CASE).state is CaseState.HUMAN_REVIEW
+    assert _events(db_conn) == events
+
+    monkeypatch.undo()  # the database is back: the same decision now goes through
+    view = orchestrator.record_review_decision(ORCH_CASE, CaseState.CLOSED, conn=db_conn,
+                                               config=orch_config)
+    assert view.outcome.state is CaseState.CLOSED
+
+
+def test_record_review_decision_unknown_case(db_conn, orch_config):
+    with pytest.raises(ToolInputError):
+        orchestrator.record_review_decision("CASE-9999", CaseState.CLOSED, conn=db_conn,
+                                            config=orch_config)
+    assert _events(db_conn, "CASE-9999") == []
+
+
+def _app_config(orch_config, tmp_path, pipeline, metadata):
+    paths = dataclasses.replace(orch_config.paths, model_pipeline=pipeline, model_metadata=metadata,
+                                runtime_db=tmp_path / "runtime" / "capstone.db")
+    return dataclasses.replace(orch_config, paths=paths)
+
+
+@pytest.mark.parametrize("broken", ["missing_pipeline", "missing_bounds"])
+def test_start_app_missing_model_refuses(orch_config, tmp_path, scoring_model_files, broken):
+    """Q-19 (4): no usable model -> AppStartupError (fixed message); no database, no case."""
+    pipeline, metadata = scoring_model_files["pipeline"], scoring_model_files["metadata"]
+    if broken == "missing_pipeline":
+        pipeline = tmp_path / "absent.joblib"
+    else:
+        data = json.loads(Path(metadata).read_text(encoding="utf-8"))
+        data["risk_band_bounds"] = None
+        metadata = tmp_path / "metadata_without_bounds.json"
+        metadata.write_text(json.dumps(data), encoding="utf-8")
+    config = _app_config(orch_config, tmp_path, pipeline, metadata)
+    with pytest.raises(orchestrator.AppStartupError) as caught:
+        orchestrator.start_app(config)
+    assert str(caught.value) == orchestrator.STARTUP_MODEL_MESSAGE
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+    assert not config.paths.runtime_db.exists() and not config.paths.runtime_db.parent.exists()
+
+
+def test_start_app_builds_resources(orch_config, tmp_path, scoring_model_files, scoring_model):
+    config = _app_config(orch_config, tmp_path, scoring_model_files["pipeline"],
+                         scoring_model_files["metadata"])
+    app = orchestrator.start_app(config)
+    assert app.config is config
+    for field in ("threshold", "risk_band_bounds", "model_version"):
+        assert getattr(app.scoring_model, field) == getattr(scoring_model, field)
+    score = ScoreResult(score=0.1, threshold=0.3, risk_band="low", model_version="m@t")
+    client = app.make_llm_client(ORCH_CASE, score, [])
+    assert isinstance(client, FakeLLMClient)  # provider "fake" in the test config
+    assert not config.paths.runtime_db.exists()  # start_app opens no database
+
+
+def test_submit_case_is_run_case(db_conn, orch_config, tmp_path, scoring_model_files):
+    """submit_case = run_case with the resources of start_app; a double submission (J09) creates
+    no second case and runs nothing again."""
+    config = _app_config(orch_config, tmp_path, scoring_model_files["pipeline"],
+                         scoring_model_files["metadata"])
+    app = orchestrator.start_app(config)
+    first = orchestrator.submit_case(_raw_case(), conn=db_conn, app=app)
+    assert first.state is CaseState.HUMAN_REVIEW
+    events = _events(db_conn)
+    second = orchestrator.submit_case(_raw_case(), conn=db_conn, app=app)
+    assert second == first
+    assert _events(db_conn) == events
+    assert db_conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 1
+
+
+def test_open_connection_one_per_run(orch_config, tmp_path):
+    """Q-12: a new connection per run, closed at the end of the run, refused in another thread."""
+    config = _app_config(orch_config, tmp_path, tmp_path / "p", tmp_path / "m")
+    with orchestrator.open_connection(config) as first:
+        first.execute("SELECT 1 FROM cases")  # schema created
+        errors = []
+
+        def other_thread():
+            try:
+                first.execute("SELECT 1")
+            except sqlite3.ProgrammingError as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=other_thread)
+        thread.start()
+        thread.join()
+        assert len(errors) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        first.execute("SELECT 1")  # closed after the run
+    with orchestrator.open_connection(config) as second:
+        assert second is not first
+
+
+def _function_names(name):
+    tree = ast.parse(ORCHESTRATOR_SOURCE.read_text(encoding="utf-8"))
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+    names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    return names | {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+
+
+def test_review_api_never_retries():
+    """PR 9 risk 1: a write is never retried — no run_with_retries in the 4 new functions."""
+    for name in WRITE_API:
+        assert not _function_names(name) & {"run_with_retries", "_run_tool_step"}, name
+
+
+def test_record_review_decision_never_uses_failed():
+    """I71 (1): record_review_decision never moves a case to FAILED."""
+    assert not _function_names("record_review_decision") & {"FAILED", "apply_transition"}
+
+
+@pytest.mark.parametrize("no_comment", [None, "   "])
+def test_record_review_decision_without_comment_length_zero(db_conn, orch_config, scoring_model,
+                                                            no_comment):
+    """I71 (c2), Q-39: no comment (None, or spaces only) -> ONE review_decision event with
+    details == {"comment_length": 0}, and reviewer_comment NULL in cases."""
+    before = _in_review(db_conn, orch_config, scoring_model)
+    orchestrator.record_review_decision(ORCH_CASE, CaseState.NEEDS_MORE_INFORMATION, no_comment,
+                                        conn=db_conn, config=orch_config)
+    new = _events(db_conn)[before:]
+    assert [(e.action, e.details) for e in new] == [("review_decision", {"comment_length": 0})]
+    row = db_conn.execute("SELECT reviewer_comment FROM cases WHERE case_id = ?",
+                          (ORCH_CASE,)).fetchone()
+    assert row["reviewer_comment"] is None

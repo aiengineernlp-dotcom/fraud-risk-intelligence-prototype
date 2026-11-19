@@ -40,8 +40,14 @@ from src.audit.audit_repository import (
 from src.storage.case_repository import (
     ALLOWED_PRIORITIES,
     LABEL_COLUMNS,
+    REVIEWER_COMMENT_MAX_CHARS,
     CaseNotFoundError,
+    CaseNotInReviewError,
     DuplicateCaseError,
+    InvalidReviewCommentError,
+    InvalidReviewDecisionError,
+    check_reviewer_comment,
+    set_review_decision,
     InvalidPriorityError,
     LabelInCaseError,
     create_case,
@@ -801,3 +807,197 @@ def test_list_cases_in_state_never_returns_a_label(db_conn):
     for state in CaseState:
         for record in list_cases_in_state(db_conn, state):
             assert not LABEL_COLUMNS & set(record.transaction)
+
+
+# --- set_review_decision (J5, PR 13, decisions I71) — write addition to n° 34 🔒 ------------------
+
+
+def _case_in_review(conn: sqlite3.Connection, case_id: str = "CASE-1") -> None:
+    """A case put straight in HUMAN_REVIEW (repository test setup, no state machine here)."""
+    create_case(conn, case_id, CaseState.RECEIVED, TRANSACTION)
+    update_state(conn, case_id, CaseState.HUMAN_REVIEW)
+
+
+@pytest.mark.parametrize("decision", sorted(REVIEWER_OUTCOMES, key=lambda s: s.value))
+def test_set_review_decision_writes_state_decision_comment_together(db_conn, decision):
+    _case_in_review(db_conn)
+    before = get_case(db_conn, "CASE-1")
+    set_review_decision(db_conn, "CASE-1", decision, "Checked the balances.")
+    after = get_case(db_conn, "CASE-1")
+    assert after.state is decision
+    assert after.reviewer_decision is decision
+    assert after.reviewer_comment == "Checked the balances."
+    # Nothing else changes (only updated_at).
+    assert (after.transaction, after.case_note, after.priority, after.created_at) == (
+        before.transaction, before.case_note, before.priority, before.created_at)
+
+
+@pytest.mark.parametrize("bad", [CaseState.FAILED, CaseState.HUMAN_REVIEW, "CLOSED", None])
+def test_set_review_decision_refuses_non_reviewer_outcome(db_conn, bad):
+    _case_in_review(db_conn)
+    before = get_case(db_conn, "CASE-1")
+    with pytest.raises(InvalidReviewDecisionError):
+        set_review_decision(db_conn, "CASE-1", bad, None)
+    assert get_case(db_conn, "CASE-1") == before  # nothing written
+
+
+@pytest.mark.parametrize("state", [CaseState.FAILED, CaseState.CLOSED, CaseState.RECEIVED])
+def test_set_review_decision_only_from_human_review(db_conn, state):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    update_state(db_conn, "CASE-1", state)
+    before = get_case(db_conn, "CASE-1")
+    with pytest.raises(CaseNotInReviewError):
+        set_review_decision(db_conn, "CASE-1", CaseState.ESCALATED, "late click")
+    assert get_case(db_conn, "CASE-1") == before  # the guard touched no row
+
+
+def test_set_review_decision_unknown_case(db_conn):
+    with pytest.raises(CaseNotFoundError):
+        set_review_decision(db_conn, "CASE-404", CaseState.CLOSED, None)
+
+
+def test_set_review_decision_touches_one_case(db_conn):
+    _case_in_review(db_conn, "CASE-1")
+    _case_in_review(db_conn, "CASE-2")
+    other = get_case(db_conn, "CASE-2")
+    set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, "ok")
+    assert get_case(db_conn, "CASE-2") == other
+
+
+def test_set_review_decision_is_one_update(db_conn):
+    """State, decision and comment are written by ONE statement: never a state without its decision."""
+    _case_in_review(db_conn)
+    statements = _sql_statements(
+        db_conn, lambda: set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, "ok"))
+    updates = [s for s in statements if s.lstrip().upper().startswith("UPDATE")]
+    assert len(updates) == 1
+    # The trace shows the bound values (the code sends "?" parameters, sqlite3 expands them here).
+    for part in ("state = 'CLOSED'", "reviewer_decision = 'CLOSED'", "reviewer_comment = 'ok'",
+                 "updated_at = ", "AND state = 'HUMAN_REVIEW'"):
+        assert part in updates[0]
+
+
+@pytest.mark.parametrize("length, accepted", [
+    (REVIEWER_COMMENT_MAX_CHARS, True), (REVIEWER_COMMENT_MAX_CHARS + 1, False)])
+def test_reviewer_comment_length_bounds(db_conn, length, accepted):
+    """I71 (c1): 1000 characters accepted, 1001 refused — never cut."""
+    assert REVIEWER_COMMENT_MAX_CHARS == 1000
+    _case_in_review(db_conn)
+    comment = "a" * length
+    if accepted:
+        set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, comment)
+        assert get_case(db_conn, "CASE-1").reviewer_comment == comment
+    else:
+        before = get_case(db_conn, "CASE-1")
+        with pytest.raises(InvalidReviewCommentError):
+            set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, comment)
+        assert get_case(db_conn, "CASE-1") == before
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
+def test_reviewer_comment_blank_becomes_none(db_conn, blank):
+    assert check_reviewer_comment(blank) is None
+    _case_in_review(db_conn)
+    set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, blank)
+    assert get_case(db_conn, "CASE-1").reviewer_comment is None
+
+
+@pytest.mark.parametrize("bad", [5, True, b"x"])
+def test_reviewer_comment_not_text_refused(db_conn, bad):
+    _case_in_review(db_conn)
+    before = get_case(db_conn, "CASE-1")
+    with pytest.raises(InvalidReviewCommentError):
+        set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, bad)
+    assert get_case(db_conn, "CASE-1") == before
+
+
+# --- reviewer decision end to end (J5, PR 13, J05, decisions I71) ---------------------------------
+
+
+def _reviewed_case_config(tmp_path):
+    """AppConfig built by hand (never load_config()), as in test_audit_export_after_run_case."""
+    from src.config import AppConfig, LLMSettings, Paths, RetrySettings, Secret, SplitSettings
+
+    settings = yaml.safe_load((REPO_ROOT / "configs" / "settings.yaml").read_text(encoding="utf-8"))
+    tools, llm, routing = settings["retries"]["tools"], settings["retries"]["llm"], settings["routing"]
+    store = tmp_path / "evidence_store.json"
+    store.write_text(json.dumps({"evidence": [
+        {"case_id": "CASE-0901", "source_id": "EV-0001", "text": "Synthetic evidence."}]}),
+        encoding="utf-8")
+    unused = tmp_path / "unused"
+    return AppConfig(
+        tool_retries=RetrySettings(max_retries=tools["max_retries"],
+                                   timeout_seconds=float(tools["timeout_seconds"])),
+        llm_retries=RetrySettings(max_retries=llm["max_retries_after_rejection"],
+                                  timeout_seconds=float(llm["timeout_seconds"])),
+        near_threshold_margin=routing["near_threshold_margin"],
+        review_capacity_per_day=routing["review_capacity_per_day"],
+        split=SplitSettings(seed=42, val_size=0.15, test_size=0.15),
+        paths=Paths(raw_data_dir=tmp_path, runtime_db=unused, demo_cases=unused,
+                    evidence_store=store, model_pipeline=unused, mlp_state=unused,
+                    model_metadata=unused, metrics_dir=tmp_path, figures_dir=tmp_path,
+                    prohibited_terms=REPO_ROOT / "configs" / "prohibited_terms.yaml"),
+        llm=LLMSettings(provider="fake", base_url="", model="", api_key=Secret("")),
+    )
+
+
+def _run_to_human_review(conn, config, scoring_model, case_id="CASE-0901"):
+    from src.agent import orchestrator
+    from src.agent.llm.fake_client import DraftFacts, FakeLLMClient
+
+    raw = {"case_id": case_id, "step": 1, "type": "TRANSFER", "amount": 181.0,
+           "oldbalanceOrg": 181.0, "newbalanceOrig": 0.0, "oldbalanceDest": 0.0,
+           "newbalanceDest": 0.0, "case_note": "Synthetic note."}
+    outcome = orchestrator.run_case(
+        raw, conn=conn, config=config, scoring_model=scoring_model,
+        make_llm_client=lambda cid, score, evidence: FakeLLMClient(
+            "valid", DraftFacts.from_official(cid, score, evidence)),
+        clock=lambda: 0.0,
+    )
+    assert outcome.state is CaseState.HUMAN_REVIEW
+
+
+@pytest.mark.validation_workflow
+@pytest.mark.parametrize("decision", sorted(REVIEWER_OUTCOMES, key=lambda s: s.value))
+def test_review_decision_recorded(db_conn, tmp_path, scoring_model, decision):
+    """Registre §3bis, J05: each decision moves the case to its final state and creates ONE audit
+    event "review_decision" (I01), with the comment length only (I71 (c2))."""
+    from src.agent import orchestrator
+
+    config = _reviewed_case_config(tmp_path)
+    _run_to_human_review(db_conn, config, scoring_model)
+    events_before = len(list_events(db_conn, "CASE-0901"))
+
+    view = orchestrator.record_review_decision(
+        "CASE-0901", decision, "Balances checked.", conn=db_conn, config=config)
+
+    assert view.outcome.state is decision
+    stored = get_case(db_conn, "CASE-0901")
+    assert stored.state is decision
+    assert stored.reviewer_decision is decision
+    assert stored.reviewer_comment == "Balances checked."
+    new_events = [s.event for s in list_events(db_conn, "CASE-0901")][events_before:]
+    assert len(new_events) == 1
+    event = new_events[0]
+    assert (event.action, event.actor, event.result) == ("review_decision", "reviewer", "ok")
+    assert (event.state_from, event.state_to) == (CaseState.HUMAN_REVIEW, decision)
+    assert event.details == {"comment_length": len("Balances checked.")}
+
+
+def test_review_comment_never_in_audit_nor_export(db_conn, tmp_path, scoring_model):
+    """I71 (c2): the TEXT of the comment is stored in cases only — never in audit_events, never in
+    an export (one case or every case, CSV or JSON)."""
+    from src.agent import orchestrator
+
+    marker = "ZQX-REVIEW-COMMENT-7731"  # invented, easy to find
+    config = _reviewed_case_config(tmp_path)
+    _run_to_human_review(db_conn, config, scoring_model)
+    orchestrator.record_review_decision(
+        "CASE-0901", CaseState.ESCALATED, f"See {marker}.", conn=db_conn, config=config)
+
+    assert get_case(db_conn, "CASE-0901").reviewer_comment == f"See {marker}."
+    for row in db_conn.execute("SELECT * FROM audit_events").fetchall():
+        assert not any(marker in str(value) for value in tuple(row))
+    for fmt in ("csv", "json"):
+        for case_id in ("CASE-0901", None):
+            assert marker not in export_audit(db_conn, fmt, case_id)

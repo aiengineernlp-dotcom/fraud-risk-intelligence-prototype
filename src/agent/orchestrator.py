@@ -6,6 +6,8 @@ Responsibility : Move one case from state to state in the fixed order of the bri
                  one audit event per transition and per attempt (G03)
                  — and the read-only API for the UI (J06): case view, review queue sorted by the
                  G11 priority, audit events and audit export, through read tools only
+                 — and the write API for the UI (J05, J09): reviewer decision, case submission,
+                 start-up checks (model loaded once) and one database connection per run
 Never does     : Compute the score, the risk band, the priority or the validity of a draft (the
                  tools, routing_policy.py and the validator do); touch the database without a tool
                  (update_case, intake_case, write_audit_event — Q-28); wrap a writing tool in
@@ -15,6 +17,8 @@ Reference      : Architecture_Projet.md v1.3 — section 1.2, section 3 (Flux 1,
                  G10, G11; brief §11.3, §11.6; PASSATION.md §6, Q-05, Q-28, decisions PR 9 and PR 10
                  — read-only API (PR 12): Architecture §4 "Points d'entrée"; Features J03, J04, J06,
                  J08; decisions I67 (read_audit tool), I69
+                 — write API (PR 13): Architecture §3 Flux 1, §3bis; Features J05, J09, I01;
+                 decisions I71, Q-12, Q-19 (4), Q-38
 """
 
 from __future__ import annotations
@@ -43,6 +47,12 @@ from src.agent.tools.write_audit_event import write_audit_event
 from src.config import AppConfig
 from src.data.case_input import CaseInput, parse_case_input
 from src.data.case_input import FEATURE_FIELDS  # PR 12: the 7 verified fields of the view
+from contextlib import contextmanager  # PR 13: open_connection
+from typing import Iterator  # PR 13
+from src.agent.llm.factory import create_llm_client  # PR 13: start_app builds make_llm_client
+from src.agent.llm.fake_client import DraftFacts  # PR 13: facts given to the fake client
+from src.agent.tools.score_transaction import load_scoring_model  # PR 13: start_app (Q-19 (4))
+from src.agent.tools.errors import ToolUnavailableError  # PR 13: model missing at start-up
 
 # Step names = the values allowed by the CHECK of step_results.step (section 10.2).
 STEP_SCORE = "score"
@@ -465,3 +475,108 @@ def get_audit_events(case_id: str | None = None, *, conn) -> list:
 def export_audit(fmt: str, case_id: str | None = None, *, conn) -> str:
     """Return the audit of one case (or of every case) as CSV or JSON text (I02, J06)."""
     return read_audit.export_events(conn, fmt, case_id)
+
+
+# --- write API for the UI (J05, J09, PR 13, decisions I71, Q-12, Q-19 (4)) --------------------------
+# Every write goes through a tool (update_case, write_audit_event — Q-28) and is never wrapped in
+# retry.py. Known limit kept (Q-38): the case and its audit event are two transactions.
+
+# Fixed message: never the text of the original error (Q-19 (4)).
+STARTUP_MODEL_MESSAGE = "The scoring model is missing or unusable: run python -m src.train"
+
+
+class AppStartupError(RuntimeError):
+    """The application cannot start (model missing or unusable): no database opened, no case."""
+
+
+class ReviewAlreadyRecordedError(RuntimeError):
+    """A decision was asked for a case that is no longer in HUMAN_REVIEW (already decided with
+    ANOTHER decision, rejected, failed…). Nothing was written to the case; the refusal is audited."""
+
+    def __init__(self, case_id: str, current: CaseState, requested: CaseState) -> None:
+        super().__init__(f"Case {case_id} is {current.value}: decision {requested.value} refused")
+        self.case_id = case_id
+        self.current = current
+        self.requested = requested
+
+
+@dataclass(frozen=True)
+class AppResources:
+    """What the UI keeps for the whole application (loaded once by start_app)."""
+
+    config: AppConfig
+    scoring_model: ScoringModel
+    make_llm_client: MakeLLMClient
+
+
+def start_app(config: AppConfig) -> AppResources:
+    """Load the scoring model once, BEFORE anything else (Q-19 (4)).
+
+    Missing model or wrong band bounds -> AppStartupError with a fixed message: no database is
+    opened, no case is created, nothing goes to FAILED.
+    """
+    try:
+        scoring_model = load_scoring_model(config.paths.model_pipeline, config.paths.model_metadata)
+    except ToolUnavailableError:
+        scoring_model = None
+    if scoring_model is None:  # raised outside the except: no chained error, no original text
+        raise AppStartupError(STARTUP_MODEL_MESSAGE)
+
+    def make_llm_client(case_id: str, score: ScoreResult,
+                        evidence: Sequence[EvidenceItem]) -> LLMClient:
+        # The fake client copies the official facts; the real one gets them in the prompt.
+        return create_llm_client(config, fake_facts=DraftFacts.from_official(case_id, score, evidence))
+
+    return AppResources(config=config, scoring_model=scoring_model, make_llm_client=make_llm_client)
+
+
+@contextmanager
+def open_connection(config: AppConfig) -> Iterator[Any]:
+    """One database connection per run of the UI script, opened and closed in the same thread
+    (Q-12): no connection is shared between threads, no check_same_thread=False, no lock."""
+    conn = update_case.open_database(config.paths.runtime_db)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def submit_case(raw_case: dict, *, conn, app: AppResources) -> CaseOutcome:
+    """Run a submitted case with the resources of start_app: run_case, nothing more.
+
+    A double submission resumes the stored case (no second case, J09, G10).
+    """
+    return run_case(raw_case, conn=conn, config=app.config, scoring_model=app.scoring_model,
+                    make_llm_client=app.make_llm_client)
+
+
+def record_review_decision(case_id: str, decision: CaseState, comment: str | None = None, *,
+                           conn, config: AppConfig) -> CaseView:
+    """Record the reviewer decision (J05): HUMAN_REVIEW -> CLOSED / ESCALATED /
+    NEEDS_MORE_INFORMATION, through update_case.record_review; return the case view.
+
+    - recorded: one "review_decision" event; details = {"comment_length": n}, never the text (I71).
+    - same decision already recorded: nothing written, no event (J09).
+    - another decision, or a case not in HUMAN_REVIEW: "invalid_transition" event, then
+      ReviewAlreadyRecordedError.
+    - ToolInputError (decision outside the 3, FAILED included; bad comment; unknown case) and
+      ToolUnavailableError (database) go up as they are: nothing audited, the case stays in
+      HUMAN_REVIEW, never FAILED (I71 (1)).
+    """
+    try:
+        previous, stored_comment, recorded = update_case.record_review(
+            conn, case_id, decision, comment)
+    except InvalidTransitionError as refused:
+        _write_event(conn, AuditEvent(
+            case_id=case_id, timestamp=_now(), actor="reviewer", action="invalid_transition",
+            result="failed", state_from=refused.current, state_to=refused.target,
+        ))
+        raise ReviewAlreadyRecordedError(case_id, refused.current, refused.target) from None
+
+    if recorded:
+        _write_event(conn, AuditEvent(
+            case_id=case_id, timestamp=_now(), actor="reviewer", action="review_decision",
+            result="ok", state_from=previous, state_to=decision,
+            details={"comment_length": len(stored_comment or "")},
+        ))
+    return get_case_view(case_id, conn=conn, config=config)

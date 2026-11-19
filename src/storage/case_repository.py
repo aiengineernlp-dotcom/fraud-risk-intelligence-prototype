@@ -2,7 +2,8 @@
 SoC layer      : 2 — Ingestion/Parser
 Responsibility : Read cases (one, or all those in a state) and write them, their state, step results: create a case
                  once (DuplicateCaseError, D-07), store the state ALREADY DECIDED by the caller,
-                 store a step result once under the key "{case_id}:{step}" (D-07, G10)
+                 store a step result once under the key "{case_id}:{step}" (D-07, G10), store the
+                 reviewer decision with its state in one UPDATE (set_review_decision, I71)
 Never does     : Decide a transition (state_machine.py + the orchestrator do); decide a score, band
                  or validity; build SQL from formatted strings (parameters "?" only); delete a row;
                  store a label (isFraud, isFlaggedFraud)
@@ -19,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.agent.domain import CaseState
+from src.agent.domain import REVIEWER_OUTCOMES  # PR 13: the 3 decisions a reviewer can record
 
 # Decision (e): the labels never enter a case (section 10.2: "jamais l'étiquette").
 LABEL_COLUMNS = frozenset({"isFraud", "isFlaggedFraud"})
@@ -223,3 +225,70 @@ def get_step_result(conn: sqlite3.Connection, case_id: str, step: str) -> StepRe
         attempts=row["attempts"],
         created_at=row["created_at"],
     )
+
+
+# --- reviewer decision (PR 13, decisions I71) -----------------------------------------------------
+
+# Decision I71 (c1): the longest reviewer comment accepted. A longer text is refused, never cut.
+REVIEWER_COMMENT_MAX_CHARS = 1000
+
+
+class InvalidReviewDecisionError(ValueError):
+    """Raised when the decision is not one of domain.REVIEWER_OUTCOMES (FAILED included, I71 (1))."""
+
+
+class InvalidReviewCommentError(ValueError):
+    """Raised when the comment is not text, or is longer than REVIEWER_COMMENT_MAX_CHARS."""
+
+
+class CaseNotInReviewError(Exception):
+    """Raised when the case exists but is no longer in HUMAN_REVIEW: nothing was written."""
+
+    def __init__(self, case_id: str) -> None:
+        self.case_id = case_id
+        super().__init__(f"Case not in human review: {case_id}")
+
+
+def check_reviewer_comment(comment: Any) -> str | None:
+    """Return the comment to store: None for no comment, empty text or spaces only; otherwise the
+    text exactly as given. Not text, or longer than REVIEWER_COMMENT_MAX_CHARS -> refused (I71 (c1))."""
+    if comment is None:
+        return None
+    if not isinstance(comment, str):
+        raise InvalidReviewCommentError("The reviewer comment must be text")
+    if comment.strip() == "":
+        return None
+    if len(comment) > REVIEWER_COMMENT_MAX_CHARS:
+        raise InvalidReviewCommentError(
+            f"The reviewer comment must have at most {REVIEWER_COMMENT_MAX_CHARS} characters")
+    return comment
+
+
+def set_review_decision(
+    conn: sqlite3.Connection,
+    case_id: str,
+    decision: CaseState,
+    comment: str | None,
+) -> None:
+    """Store the reviewer decision ALREADY checked by the caller (update_case + state_machine.py).
+
+    One UPDATE writes the new state, reviewer_decision, reviewer_comment and updated_at together:
+    the state never changes without its decision. The guard "AND state = HUMAN_REVIEW" makes a
+    second writer (double click, two sessions) touch no row instead of overwriting a decision.
+    """
+    # Barriers of the last layer before the database (the CHECK of db.py is a second one).
+    if not isinstance(decision, CaseState) or decision not in REVIEWER_OUTCOMES:
+        raise InvalidReviewDecisionError(
+            f"Decision must be one of {sorted(state.value for state in REVIEWER_OUTCOMES)}")
+    stored_comment = check_reviewer_comment(comment)
+    with conn:
+        cursor = conn.execute(
+            "UPDATE cases SET state = ?, reviewer_decision = ?, reviewer_comment = ?, updated_at = ?"
+            " WHERE case_id = ? AND state = ?",
+            (decision.value, decision.value, stored_comment, utc_now(), case_id,
+             CaseState.HUMAN_REVIEW.value),
+        )
+    if cursor.rowcount == 0:
+        if get_case(conn, case_id) is None:
+            raise CaseNotFoundError(case_id)
+        raise CaseNotInReviewError(case_id)
