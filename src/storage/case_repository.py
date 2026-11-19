@@ -1,6 +1,6 @@
 """
 SoC layer      : 2 — Ingestion/Parser
-Responsibility : Read and write cases, their current state and their step results: create a case
+Responsibility : Read cases (one, or all those in a state) and write them, their state, step results: create a case
                  once (DuplicateCaseError, D-07), store the state ALREADY DECIDED by the caller,
                  store a step result once under the key "{case_id}:{step}" (D-07, G10)
 Never does     : Decide a transition (state_machine.py + the orchestrator do); decide a score, band
@@ -142,6 +142,15 @@ def get_case(conn: sqlite3.Connection, case_id: str) -> CaseRecord | None:
     """Return the case, or None if it does not exist."""
     row = conn.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,)).fetchone()
     return _case_from_row(row) if row is not None else None
+
+
+def list_cases_in_state(conn: sqlite3.Connection, state: CaseState) -> list[CaseRecord]:
+    """Return every case whose current state is `state` (read only, decision I69 (2)).
+
+    No order on purpose: sorting the review queue is the routing policy's job (G11), not layer 2's.
+    """
+    rows = conn.execute("SELECT * FROM cases WHERE state = ?", (state.value,)).fetchall()
+    return [_case_from_row(row) for row in rows]
 
 
 def update_state(conn: sqlite3.Connection, case_id: str, new_state: CaseState) -> None:
