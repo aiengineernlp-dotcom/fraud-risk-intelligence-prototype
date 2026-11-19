@@ -648,6 +648,7 @@ FORBIDDEN_IMPORTS = {"requests", "httpx", "urllib", "socket", "subprocess", "ope
 KNOWN_TOOLS = {
     "intake_case.py", "score_transaction.py", "retrieve_case_evidence.py", "write_audit_event.py",
     "read_cases.py", "read_audit.py",
+    "read_demo_cases.py",  # PR 14 (I73 (4))
 }
 
 
@@ -1088,3 +1089,76 @@ def test_open_database_unavailable(tmp_path):
         update_case.open_database(folder)
     assert str(caught.value) == "The case database is unavailable"
     assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+# --- read_demo_cases (J5, PR 14, decision I73 (4)) ------------------------------------------------
+
+from src.agent.tools import read_demo_cases  # noqa: E402  (PR 14 tests only)
+
+
+def _demo_file(tmp_path, cases, name="cases.json"):
+    """A demo cases file written in tmp_path (invented cases, same shape as data/demo/cases.json)."""
+    path = tmp_path / name
+    path.write_text(json.dumps({"cases": cases, "seed": 42}), encoding="utf-8")
+    return path
+
+
+def test_read_demo_cases_ids_in_file_order(tmp_path):
+    path = _demo_file(tmp_path, [_valid_input(case_id="CASE-0003"), _valid_input(case_id="CASE-0001")])
+    assert read_demo_cases.list_demo_case_ids(path) == ["CASE-0003", "CASE-0001"]
+
+
+def test_read_demo_cases_known_case_is_a_copy(tmp_path):
+    raw = {**_valid_input(case_id="CASE-0002"), "case_note": "a note"}
+    path = _demo_file(tmp_path, [_valid_input(), raw])
+    case = read_demo_cases.get_demo_case(path, "CASE-0002")
+    assert case == raw
+    case["amount"] = -1.0  # changing the copy changes nothing in the file
+    assert read_demo_cases.get_demo_case(path, "CASE-0002") == raw
+
+
+def test_read_demo_cases_unknown_id(tmp_path):
+    path = _demo_file(tmp_path, [_valid_input()])
+    with pytest.raises(ToolInputError):
+        read_demo_cases.get_demo_case(path, "CASE-9999")
+
+
+@pytest.mark.parametrize("content", [
+    None,                              # file missing
+    "not json {",                      # unreadable
+    json.dumps([1, 2, 3]),             # not an object
+    json.dumps({"other": []}),         # no "cases"
+    json.dumps({"cases": ["CASE-0001"]}),            # a case that is not an object
+    json.dumps({"cases": [{"case_id": 7}]}),         # a case_id that is not text
+    json.dumps({"cases": [{"case_id": "CASE-0001"}, {"case_id": "CASE-0001"}]}),  # duplicate ID
+], ids=["missing", "unreadable", "not_object", "no_cases", "case_not_object", "id_not_text",
+        "duplicate_id"])
+def test_read_demo_cases_broken_file_is_unavailable(tmp_path, content):
+    """A broken file is a failure (ToolUnavailableError), never an empty list (same rule as Q-17)."""
+    path = tmp_path / "cases.json"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    for read in (lambda: read_demo_cases.list_demo_case_ids(path),
+                 lambda: read_demo_cases.get_demo_case(path, "CASE-0001")):
+        with pytest.raises(ToolUnavailableError) as caught:
+            read()
+        assert str(caught.value) == read_demo_cases.UNAVAILABLE_MESSAGE
+        assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+def test_read_demo_cases_reads_the_versioned_demo_file():
+    """The real data/demo/cases.json (versioned, label-free) has 10 cases readable by the tool."""
+    path = Path(__file__).resolve().parents[1] / "data" / "demo" / "cases.json"
+    ids = read_demo_cases.list_demo_case_ids(path)
+    assert len(ids) == len(set(ids)) == 10
+    assert set(read_demo_cases.get_demo_case(path, ids[0])) == {"case_id", "case_note", *FEATURE_FIELDS}
+
+
+def test_read_demo_cases_is_read_only_effect():
+    """I73 (4): "read_only", and no import of any database or writing module."""
+    assert read_demo_cases.TOOL_EFFECT == "read_only"
+    tree = ast.parse((TOOLS_DIR / "read_demo_cases.py").read_text(encoding="utf-8"))
+    modules = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    modules |= {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+                for alias in node.names}
+    assert not [m for m in modules if m.startswith(("src.storage", "src.audit", "sqlite3"))]
