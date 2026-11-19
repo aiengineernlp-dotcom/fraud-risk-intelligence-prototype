@@ -40,6 +40,7 @@ from src.agent.tools.score_transaction import ScoringModel, load_scoring_model, 
 from src.data.case_input import FEATURE_FIELDS, CaseInput, CaseInputError, parse_case_input
 from src.models.risk_bands import risk_band
 from src.storage.case_repository import get_case
+from src.storage import case_repository  # PR 13: review decision setup and simulated failures
 from src.data.load_paysim import load_raw
 from src.data.split import stratified_split
 from src.storage.evidence_repository import EvidenceStoreError, get_evidence
@@ -957,3 +958,133 @@ def test_read_tools_are_read_only_effect(path):
     }
     assert not imported & WRITING_NAMES
     assert not called & WRITING_NAMES
+
+
+# --- update_case.record_review and open_database (J5, PR 13, decisions I71, Q-12) ----------------
+
+import sqlite3  # noqa: E402  (PR 13 tests only)
+import threading  # noqa: E402
+
+
+def _case_in_review(conn, case_id="CASE-0001"):
+    """A case taken in by the intake tool, then put straight in HUMAN_REVIEW (test setup)."""
+    intake_case(conn, _valid_input(case_id=case_id))
+    case_repository.update_state(conn, case_id, CaseState.HUMAN_REVIEW)
+
+
+@pytest.mark.parametrize("bad", [CaseState.FAILED, CaseState.HUMAN_REVIEW, CaseState.SCORED,
+                                 "CLOSED", None])
+def test_record_review_refuses_non_reviewer_outcome(db_conn, bad):
+    """I71 (1): FAILED (allowed by state_machine.py from HUMAN_REVIEW) is never a reviewer decision."""
+    _case_in_review(db_conn)
+    before = update_case.get_case(db_conn, "CASE-0001")
+    with pytest.raises(ToolInputError):
+        update_case.record_review(db_conn, "CASE-0001", bad, "comment")
+    assert update_case.get_case(db_conn, "CASE-0001") == before
+
+
+def test_record_review_unknown_case(db_conn):
+    with pytest.raises(ToolInputError):
+        update_case.record_review(db_conn, "CASE-9999", CaseState.CLOSED)
+    assert update_case.get_case(db_conn, "CASE-9999") is None
+
+
+def test_record_review_same_decision_is_noop(db_conn):
+    _case_in_review(db_conn)
+    previous, comment, recorded = update_case.record_review(
+        db_conn, "CASE-0001", CaseState.CLOSED, "first")
+    assert (previous, comment, recorded) == (CaseState.HUMAN_REVIEW, "first", True)
+    stored = update_case.get_case(db_conn, "CASE-0001")
+    # J09: the same decision again (double click) writes nothing; the first comment is kept.
+    again = update_case.record_review(db_conn, "CASE-0001", CaseState.CLOSED, "second")
+    assert again == (CaseState.CLOSED, "first", False)
+    assert update_case.get_case(db_conn, "CASE-0001") == stored  # updated_at unchanged too
+
+
+def test_record_review_other_decision_refused(db_conn):
+    _case_in_review(db_conn)
+    update_case.record_review(db_conn, "CASE-0001", CaseState.CLOSED)
+    stored = update_case.get_case(db_conn, "CASE-0001")
+    with pytest.raises(InvalidTransitionError):
+        update_case.record_review(db_conn, "CASE-0001", CaseState.ESCALATED)
+    assert update_case.get_case(db_conn, "CASE-0001") == stored
+
+
+@pytest.mark.parametrize("state", [CaseState.RECEIVED, CaseState.FAILED,
+                                   CaseState.VALIDATION_REJECTED])
+def test_record_review_case_not_in_review(db_conn, state):
+    intake_case(db_conn, _valid_input())
+    case_repository.update_state(db_conn, "CASE-0001", state)
+    before = update_case.get_case(db_conn, "CASE-0001")
+    with pytest.raises(InvalidTransitionError):
+        update_case.record_review(db_conn, "CASE-0001", CaseState.CLOSED)
+    assert update_case.get_case(db_conn, "CASE-0001") == before
+
+
+@pytest.mark.parametrize("bad", ["a" * 1001, 5])
+def test_record_review_bad_comment_writes_nothing(db_conn, bad):
+    _case_in_review(db_conn)
+    before = update_case.get_case(db_conn, "CASE-0001")
+    with pytest.raises(ToolInputError):
+        update_case.record_review(db_conn, "CASE-0001", CaseState.CLOSED, bad)
+    assert update_case.get_case(db_conn, "CASE-0001") == before
+
+
+def test_record_review_database_down(db_conn, monkeypatch):
+    """I71 (1): a database failure while writing -> ToolUnavailableError, case stays in review."""
+    _case_in_review(db_conn)
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(case_repository, "set_review_decision", broken)
+    with pytest.raises(ToolUnavailableError):
+        update_case.record_review(db_conn, "CASE-0001", CaseState.CLOSED)
+    assert update_case.get_case(db_conn, "CASE-0001").state is CaseState.HUMAN_REVIEW
+
+
+def test_record_review_race_same_decision(db_conn, monkeypatch):
+    """Two sessions click the same decision: the other one writes between our read and our UPDATE
+    (the guard touches no row) -> nothing more is written, the stored decision is returned."""
+    _case_in_review(db_conn)
+    real = case_repository.set_review_decision
+
+    def faster_writer_then_ours(conn, case_id, decision, comment):
+        real(conn, case_id, CaseState.CLOSED, "other session")  # the other session wins the race
+        real(conn, case_id, decision, comment)                  # ours: CaseNotInReviewError
+
+    monkeypatch.setattr(case_repository, "set_review_decision", faster_writer_then_ours)
+    result = update_case.record_review(db_conn, "CASE-0001", CaseState.CLOSED, "ours")
+    assert result == (CaseState.CLOSED, "other session", False)
+    assert update_case.get_case(db_conn, "CASE-0001").reviewer_comment == "other session"
+
+
+def test_open_database_creates_schema_and_stays_in_its_thread(tmp_path):
+    """Q-12: one connection per run, used only by the thread that opened it."""
+    conn = update_case.open_database(tmp_path / "runtime" / "capstone.db")
+    try:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"cases", "step_results", "audit_events"} <= tables
+        errors = []
+
+        def other_thread():
+            try:
+                conn.execute("SELECT 1")
+            except sqlite3.ProgrammingError as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=other_thread)
+        thread.start()
+        thread.join()
+        assert len(errors) == 1  # check_same_thread kept at True
+    finally:
+        conn.close()
+
+
+def test_open_database_unavailable(tmp_path):
+    folder = tmp_path / "a_folder.db"
+    folder.mkdir()  # a folder where the database file should be
+    with pytest.raises(ToolUnavailableError) as caught:
+        update_case.open_database(folder)
+    assert str(caught.value) == "The case database is unavailable"
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
