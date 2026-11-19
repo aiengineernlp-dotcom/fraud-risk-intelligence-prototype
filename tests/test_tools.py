@@ -30,10 +30,11 @@ from src.agent.tools.errors import (
     ToolUnavailableError,
 )
 from src.agent.tools.intake_case import intake_case
-from src.agent.tools import update_case
+from src.agent.tools import read_audit, read_cases, update_case
 from src.agent.state_machine import InvalidTransitionError
 from src.agent.tools.retrieve_case_evidence import retrieve_case_evidence
 from src.agent.tools.write_audit_event import write_audit_event
+from src.audit.audit_export import export_audit as _export_audit
 from src.audit.audit_repository import list_events
 from src.agent.tools.score_transaction import ScoringModel, load_scoring_model, score_transaction
 from src.data.case_input import FEATURE_FIELDS, CaseInput, CaseInputError, parse_case_input
@@ -645,6 +646,7 @@ FINANCIAL_WORDS = (
 FORBIDDEN_IMPORTS = {"requests", "httpx", "urllib", "socket", "subprocess", "openai"}
 KNOWN_TOOLS = {
     "intake_case.py", "score_transaction.py", "retrieve_case_evidence.py", "write_audit_event.py",
+    "read_cases.py", "read_audit.py",
 }
 
 
@@ -799,3 +801,159 @@ def test_update_case_database_down(db_conn):
         update_case.get_case(db_conn, "CASE-0001")
     with pytest.raises(ToolUnavailableError):
         update_case.set_case_priority(db_conn, "CASE-0001", "high")
+
+
+# --- read_cases.py and read_audit.py (J5, PR 12, decisions I67, I69 (1), (2), (7)) ---------------
+
+READ_TOOLS = (read_cases, read_audit)
+READ_TOOL_FILES = {"read_cases.py", "read_audit.py"}
+# Every function that writes to the database, in the repositories (n° 34, 35) and the tools.
+WRITING_NAMES = {
+    "append_event", "create_case", "update_state", "set_priority", "save_step_result",
+    "write_audit_event", "intake_case", "transition_case", "save_step", "set_case_priority",
+    "execute", "executemany", "executescript", "commit",
+}
+
+
+def _sql_statements(conn, action):
+    """Run `action` and return every SQL statement sent to the database meanwhile."""
+    seen = []
+    conn.set_trace_callback(seen.append)
+    try:
+        action()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def _assert_read_only(conn, action):
+    before = conn.total_changes
+    statements = _sql_statements(conn, action)
+    assert conn.total_changes == before
+    assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+
+
+def _two_cases_in_review(conn):
+    """CASE-0001 and CASE-0002 in HUMAN_REVIEW, CASE-0003 left in RECEIVED."""
+    for case_id in ("CASE-0001", "CASE-0002", "CASE-0003"):
+        intake_case(conn, _valid_input(case_id=case_id))
+    for case_id in ("CASE-0001", "CASE-0002"):
+        for target in (CaseState.SCORED, CaseState.EVIDENCE_READY, CaseState.DRAFTED,
+                       CaseState.VALIDATED, CaseState.HUMAN_REVIEW):
+            update_case.transition_case(conn, case_id, target)
+
+
+def _insert_audit_raw(conn, details_json):
+    """Plain SQL insert (bypasses the checks of append_event), to test the read barrier."""
+    with conn:
+        conn.execute(
+            "INSERT INTO audit_events (case_id, timestamp, actor, action, result, details_json)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            ("CASE-0001", "2026-11-13T10:00:00.000000+00:00", "system", "tool_call", "ok",
+             details_json),
+        )
+
+
+def test_read_cases_lists_one_state(db_conn):
+    _two_cases_in_review(db_conn)
+    in_review = read_cases.list_cases_in_state(db_conn, CaseState.HUMAN_REVIEW)
+    assert sorted(c.case_id for c in in_review) == ["CASE-0001", "CASE-0002"]
+    assert [c.case_id for c in read_cases.list_cases_in_state(db_conn, CaseState.RECEIVED)] == [
+        "CASE-0003"]
+    assert read_cases.list_cases_in_state(db_conn, CaseState.CLOSED) == []
+
+
+@pytest.mark.parametrize("state", ["HUMAN_REVIEW", None, 3])
+def test_read_cases_refuses_non_state(db_conn, state):
+    with pytest.raises(ToolInputError):
+        read_cases.list_cases_in_state(db_conn, state)
+
+
+def test_read_cases_database_down(db_conn):
+    db_conn.close()
+    with pytest.raises(ToolUnavailableError):
+        read_cases.list_cases_in_state(db_conn, CaseState.HUMAN_REVIEW)
+
+
+def test_read_cases_is_read_only(db_conn):
+    _two_cases_in_review(db_conn)
+    _assert_read_only(db_conn, lambda: read_cases.list_cases_in_state(db_conn, CaseState.HUMAN_REVIEW))
+
+
+def test_read_audit_events_one_case_and_all(db_conn):
+    for case_id in ("CASE-0001", "CASE-0002"):
+        intake_case(db_conn, _valid_input(case_id=case_id))
+    ids = [write_audit_event(db_conn, _event(case_id=c)) for c in ("CASE-0002", "CASE-0001")]
+    assert [s.event_id for s in read_audit.read_events(db_conn)] == sorted(ids)
+    assert [s.event_id for s in read_audit.read_events(db_conn, "CASE-0001")] == [ids[1]]
+    assert read_audit.read_events(db_conn, "CASE-9999") == []  # unknown case: empty, no error
+
+
+def test_read_audit_refuses_label(db_conn):
+    """I69 (7): a label in `details` refuses the read; the value never appears in the message."""
+    intake_case(db_conn, _valid_input())
+    write_audit_event(db_conn, _event(details={"nested": {"isFraud": "LABEL-VALUE-4711"}}))
+    with pytest.raises(ToolInputError) as caught:
+        read_audit.read_events(db_conn, "CASE-0001")
+    assert "LABEL-VALUE-4711" not in str(caught.value)
+    assert "isFraud" in str(caught.value)  # the key path is named, to find the event
+    with pytest.raises(ToolInputError) as caught:
+        read_audit.export_events(db_conn, "json")
+    assert "LABEL-VALUE-4711" not in str(caught.value)
+
+
+def test_read_audit_refuses_secret_inserted_raw(db_conn):
+    intake_case(db_conn, _valid_input())
+    _insert_audit_raw(db_conn, json.dumps({"api_key": "SECRET-VALUE-0815"}))
+    for read in (lambda: read_audit.read_events(db_conn),
+                 lambda: read_audit.export_events(db_conn, "csv")):
+        with pytest.raises(ToolInputError) as caught:
+            read()
+        assert "SECRET-VALUE-0815" not in str(caught.value)
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_read_audit_export_matches_audit_export(db_conn, fmt):
+    for case_id in ("CASE-0001", "CASE-0002"):
+        intake_case(db_conn, _valid_input(case_id=case_id))
+        write_audit_event(db_conn, _event(case_id=case_id))
+    assert read_audit.export_events(db_conn, fmt) == _export_audit(db_conn, fmt)
+    assert read_audit.export_events(db_conn, fmt, "CASE-0002") == _export_audit(
+        db_conn, fmt, "CASE-0002")
+
+
+def test_read_audit_unknown_format(db_conn):
+    with pytest.raises(ToolInputError):
+        read_audit.export_events(db_conn, "xlsx")
+
+
+def test_read_audit_database_down(db_conn):
+    db_conn.close()
+    with pytest.raises(ToolUnavailableError):
+        read_audit.read_events(db_conn)
+    with pytest.raises(ToolUnavailableError):
+        read_audit.export_events(db_conn, "csv")
+
+
+def test_read_audit_is_read_only(db_conn):
+    intake_case(db_conn, _valid_input())
+    write_audit_event(db_conn, _event())
+    _assert_read_only(db_conn, lambda: read_audit.read_events(db_conn))
+    _assert_read_only(db_conn, lambda: read_audit.export_events(db_conn, "csv", "CASE-0001"))
+
+
+@pytest.mark.parametrize("path", sorted(READ_TOOL_FILES))
+def test_read_tools_are_read_only_effect(path):
+    """I69 (1): both read tools declare "read_only" and neither imports nor calls a writing function."""
+    module = importlib.import_module(f"src.agent.tools.{Path(path).stem}")
+    assert module.TOOL_EFFECT == "read_only"
+    tree = ast.parse((TOOLS_DIR / path).read_text(encoding="utf-8"))
+    imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+                for alias in node.names}
+    called = {
+        node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute))
+    }
+    assert not imported & WRITING_NAMES
+    assert not called & WRITING_NAMES

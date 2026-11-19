@@ -48,6 +48,9 @@ from src.audit.audit_repository import list_events
 from src.config import RetrySettings
 from src.models.risk_bands import risk_band
 from src.storage.case_repository import create_case, utc_now
+from src.storage.case_repository import set_priority, update_state  # PR 12 setup
+from src.audit.audit_export import export_audit as _export_audit  # PR 12 comparison
+from src.data.case_input import FEATURE_FIELDS  # PR 12: fields of the case view
 import json
 from src.agent import orchestrator
 from src.agent.prompt_builder import PROMPT_VERSION
@@ -771,3 +774,210 @@ def test_retry_never_wraps_writing_tools():
             names = {n.id for n in nodes if isinstance(n, ast.Name)}
             names |= {n.attr for n in nodes if isinstance(n, ast.Attribute)}
             assert not names & WRITING_TOOL_NAMES, (call.func.id, names & WRITING_TOOL_NAMES)
+
+
+# --- read-only API for the UI (J06, PR 12, decisions I67, I69) -----------------------------------
+
+READ_API = ("get_case_view", "list_review_queue", "get_audit_events", "export_audit")
+# Everything that writes, directly or through a helper of the orchestrator (I69 (5)).
+READ_API_FORBIDDEN = {"transition_case", "save_step", "set_case_priority", "write_audit_event",
+                      "intake_case", "apply_transition", "_write_event", "run_case", "_advance",
+                      "_reject", "_attempt_auditor"}
+
+
+def _review_case_raw(conn, case_id, priority, created_at):
+    """A case put straight in HUMAN_REVIEW (test setup only), with a fixed created_at."""
+    create_case(conn, case_id, CaseState.RECEIVED, {"step": 1})
+    update_state(conn, case_id, CaseState.HUMAN_REVIEW)
+    if priority is not None:
+        set_priority(conn, case_id, priority)
+    with conn:  # created_at fixed by plain SQL: two creations can share the same microsecond
+        conn.execute("UPDATE cases SET created_at = ? WHERE case_id = ?", (created_at, case_id))
+
+
+def _read_sql(conn, action):
+    seen = []
+    conn.set_trace_callback(seen.append)
+    try:
+        action()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def test_review_queue_sorted_by_priority_then_age(db_conn):
+    """I69 (3): two high cases created B then A, one normal (created first) -> B, A, normal."""
+    _review_case_raw(db_conn, "CASE-0003", "normal", "2026-11-19T08:00:00.000000+00:00")
+    _review_case_raw(db_conn, "CASE-0002", "high", "2026-11-19T09:00:00.000000+00:00")  # B
+    _review_case_raw(db_conn, "CASE-0001", "high", "2026-11-19T10:00:00.000000+00:00")  # A
+    queue = orchestrator.list_review_queue(conn=db_conn)
+    assert [item.case_id for item in queue] == ["CASE-0002", "CASE-0001", "CASE-0003"]
+    assert [item.priority for item in queue] == [PRIORITY_HIGH, PRIORITY_HIGH, PRIORITY_NORMAL]
+
+
+def test_review_queue_same_age_sorted_by_case_id(db_conn):
+    same = "2026-11-19T09:00:00.000000+00:00"
+    for case_id in ("CASE-0009", "CASE-0004", "CASE-0007"):
+        _review_case_raw(db_conn, case_id, "normal", same)
+    assert [i.case_id for i in orchestrator.list_review_queue(conn=db_conn)] == [
+        "CASE-0004", "CASE-0007", "CASE-0009"]
+
+
+def test_review_queue_only_human_review(db_conn):
+    _review_case_raw(db_conn, "CASE-0001", "normal", "2026-11-19T09:00:00.000000+00:00")
+    for case_id, state in (("CASE-0002", CaseState.VALIDATION_REJECTED),
+                           ("CASE-0003", CaseState.FAILED), ("CASE-0004", CaseState.CLOSED)):
+        create_case(db_conn, case_id, CaseState.RECEIVED, {"step": 1})
+        update_state(db_conn, case_id, state)
+        set_priority(db_conn, case_id, "high")  # a priority alone never puts a case in the queue
+    create_case(db_conn, "CASE-0005", CaseState.RECEIVED, {"step": 1})
+    assert [i.case_id for i in orchestrator.list_review_queue(conn=db_conn)] == ["CASE-0001"]
+
+
+def test_review_queue_empty(db_conn):
+    assert orchestrator.list_review_queue(conn=db_conn) == []
+
+
+def test_review_queue_missing_priority_raises(db_conn):
+    """I69 (4): a case in review without a priority is an error, never a guessed place."""
+    _review_case_raw(db_conn, "CASE-0001", "high", "2026-11-19T09:00:00.000000+00:00")
+    _review_case_raw(db_conn, "CASE-0002", None, "2026-11-19T10:00:00.000000+00:00")
+    with pytest.raises(orchestrator.MissingPriorityError) as caught:
+        orchestrator.list_review_queue(conn=db_conn)
+    assert caught.value.case_id == "CASE-0002"
+    assert "CASE-0002" in str(caught.value)
+
+
+def test_review_queue_unknown_priority_raises(db_conn):
+    _review_case_raw(db_conn, "CASE-0001", "high", "2026-11-19T09:00:00.000000+00:00")
+    with db_conn:  # plain SQL: set_priority would refuse it
+        db_conn.execute("UPDATE cases SET priority = 'urgent' WHERE case_id = 'CASE-0001'")
+    with pytest.raises(orchestrator.MissingPriorityError):
+        orchestrator.list_review_queue(conn=db_conn)
+
+
+def test_review_queue_items_carry_no_note_nor_transaction(db_conn, orch_config, scoring_model):
+    _run(db_conn, orch_config, scoring_model, raw=_raw_case(case_note="QUEUE-NOTE-123"))
+    (item,) = orchestrator.list_review_queue(conn=db_conn)
+    assert [f for f in item.__dataclass_fields__] == ["case_id", "priority", "created_at"]
+    assert "QUEUE-NOTE-123" not in repr(item)
+
+
+def test_review_queue_after_run_case(db_conn, orch_config, scoring_model):
+    outcome = _run(db_conn, orch_config, scoring_model)
+    _run(db_conn, orch_config, scoring_model, maker=_FakeMaker("prohibited_claim"),
+         raw=_raw_case("CASE-0002"))  # rejected: never in the queue
+    queue = orchestrator.list_review_queue(conn=db_conn)
+    assert [(i.case_id, i.priority) for i in queue] == [(ORCH_CASE, outcome.priority)]
+
+
+def test_case_view_matches_run_case(db_conn, orch_config, scoring_model):
+    outcome = _run(db_conn, orch_config, scoring_model)
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    assert view.outcome == outcome  # one way to build the view (I69 (5), P3)
+    assert view.outcome.failure_cause is None
+    assert list(view.transaction) == list(FEATURE_FIELDS)
+    assert view.transaction == {name: _raw_case()[name] for name in FEATURE_FIELDS}
+
+
+def test_case_view_has_no_label_nor_note(db_conn, orch_config, scoring_model):
+    """I69 (6): no label (even if one were stored) and no case note in the view."""
+    _run(db_conn, orch_config, scoring_model, raw=_raw_case(case_note="TRAP-NOTE-VIEW-42"))
+    stored = update_case.get_case(db_conn, ORCH_CASE).transaction
+    with db_conn:  # plain SQL: create_case would refuse a label
+        db_conn.execute("UPDATE cases SET transaction_json = ? WHERE case_id = ?",
+                        (json.dumps({**stored, "isFraud": 1, "isFlaggedFraud": 0}), ORCH_CASE))
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    assert set(view.transaction) == set(FEATURE_FIELDS)
+    for hidden in ("isFraud", "isFlaggedFraud", "TRAP-NOTE-VIEW-42", "case_note"):
+        assert hidden not in repr(view)
+
+
+def test_case_view_rejected_case_shows_reasons_not_draft(db_conn, orch_config, scoring_model):
+    _run(db_conn, orch_config, scoring_model, maker=_FakeMaker("prohibited_claim"))
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    assert view.outcome.state is CaseState.VALIDATION_REJECTED
+    assert view.outcome.validation_reasons  # the reasons are shown (J04)
+    assert view.outcome.draft is None       # never a rejected draft (brief §11.6)
+    assert update_case.get_step(db_conn, ORCH_CASE, orchestrator.STEP_DRAFT) is None
+
+
+def test_case_view_unknown_case(db_conn, orch_config):
+    with pytest.raises(ToolInputError, match="Unknown case: CASE-0404"):
+        orchestrator.get_case_view("CASE-0404", conn=db_conn, config=orch_config)
+
+
+def test_get_audit_events_one_case_and_all(db_conn, orch_config, scoring_model):
+    _run(db_conn, orch_config, scoring_model)
+    _run(db_conn, orch_config, scoring_model, raw=_raw_case("CASE-0002"))
+    one = orchestrator.get_audit_events(ORCH_CASE, conn=db_conn)
+    every = orchestrator.get_audit_events(conn=db_conn)
+    assert [s.event for s in one] == _events(db_conn)
+    assert {s.event.case_id for s in every} == {ORCH_CASE, "CASE-0002"}
+    assert [s.event_id for s in every] == sorted(s.event_id for s in every)
+
+
+def test_get_audit_events_refuses_label(db_conn, orch_config, scoring_model):
+    """I69 (7): a label in `details` -> ToolInputError; the value never appears in the message."""
+    _run(db_conn, orch_config, scoring_model)
+    write_audit_event(db_conn, AuditEvent(
+        case_id=ORCH_CASE, timestamp=utc_now(), actor="system", action="tool_call", result="ok",
+        details={"isFraud": "LABEL-VALUE-9001"}))
+    with pytest.raises(ToolInputError) as caught:
+        orchestrator.get_audit_events(ORCH_CASE, conn=db_conn)
+    assert "LABEL-VALUE-9001" not in str(caught.value)
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_export_audit_matches_audit_export(db_conn, orch_config, scoring_model, fmt):
+    _run(db_conn, orch_config, scoring_model)
+    _run(db_conn, orch_config, scoring_model, raw=_raw_case("CASE-0002"))
+    assert orchestrator.export_audit(fmt, conn=db_conn) == _export_audit(db_conn, fmt)
+    assert orchestrator.export_audit(fmt, ORCH_CASE, conn=db_conn) == _export_audit(
+        db_conn, fmt, ORCH_CASE)
+
+
+def test_read_api_never_writes(db_conn, orch_config, scoring_model):
+    """I69 (5): the 4 functions change nothing and send only SELECT statements."""
+    _run(db_conn, orch_config, scoring_model)
+    reads = [
+        lambda: orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config),
+        lambda: orchestrator.list_review_queue(conn=db_conn),
+        lambda: orchestrator.get_audit_events(conn=db_conn),
+        lambda: orchestrator.export_audit("csv", ORCH_CASE, conn=db_conn),
+    ]
+    for read in reads:
+        before = db_conn.total_changes
+        statements = _read_sql(db_conn, read)
+        assert db_conn.total_changes == before
+        assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+
+
+def test_read_api_calls_no_writing_function():
+    """I69 (5): `ast` of the 4 functions and, step by step, of every local function they call."""
+    tree = ast.parse(ORCHESTRATOR_SOURCE.read_text(encoding="utf-8"))
+    local_defs = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    assert set(READ_API) <= set(local_defs), "scan found nothing"
+    seen, todo, names = set(), list(READ_API), set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        nodes = list(ast.walk(local_defs[name]))
+        found = {n.id for n in nodes if isinstance(n, ast.Name)}
+        found |= {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+        names |= found
+        todo += [n for n in found if n in local_defs]
+    assert {"_outcome", "_queue_key"} <= seen  # the helpers really are followed
+    assert not names & READ_API_FORBIDDEN, names & READ_API_FORBIDDEN
+
+
+def test_case_view_never_shows_draft_outside_review(db_conn, orch_config, scoring_model):
+    """A stored draft is shown only in human review or later (_outcome, brief §11.6), also in the view."""
+    _run(db_conn, orch_config, scoring_model)  # HUMAN_REVIEW: a validated draft is stored
+    update_case.transition_case(db_conn, ORCH_CASE, CaseState.FAILED)  # setup: HUMAN_REVIEW -> FAILED
+    assert update_case.get_step(db_conn, ORCH_CASE, orchestrator.STEP_DRAFT) is not None
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    assert view.outcome.state is CaseState.FAILED
+    assert view.outcome.draft is None

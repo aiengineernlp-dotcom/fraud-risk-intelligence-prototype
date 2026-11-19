@@ -4,6 +4,8 @@ Responsibility : Move one case from state to state in the fixed order of the bri
                  (intake -> score -> evidence -> draft -> validation -> human review), calling the
                  tools and the LLM; idempotence by stored step results (G10); review routing;
                  one audit event per transition and per attempt (G03)
+                 — and the read-only API for the UI (J06): case view, review queue sorted by the
+                 G11 priority, audit events and audit export, through read tools only
 Never does     : Compute the score, the risk band, the priority or the validity of a draft (the
                  tools, routing_policy.py and the validator do); touch the database without a tool
                  (update_case, intake_case, write_audit_event — Q-28); wrap a writing tool in
@@ -11,6 +13,8 @@ Never does     : Compute the score, the risk band, the priority or the validity 
 Reference      : Architecture_Projet.md v1.3 — section 1.2, section 3 (Flux 1, 2a, 2b),
                  section 3bis, section 5, section 8 (n° 63), section 10.2; Features_Complet.md G03,
                  G10, G11; brief §11.3, §11.6; PASSATION.md §6, Q-05, Q-28, decisions PR 9 and PR 10
+                 — read-only API (PR 12): Architecture §4 "Points d'entrée"; Features J03, J04, J06,
+                 J08; decisions I67 (read_audit tool), I69
 """
 
 from __future__ import annotations
@@ -25,9 +29,12 @@ from src.agent.llm.base import LLMClient, LLMError
 from src.agent.prompt_builder import PROMPT_VERSION, PromptTemplateError, build_messages
 from src.agent.retry import RESULT_REJECTED, AttemptRecord, run_with_retries
 from src.agent.routing_policy import route_case
+from src.agent.routing_policy import PRIORITY_HIGH, PRIORITY_NORMAL  # PR 12: review queue order
 from src.agent.state_machine import InvalidTransitionError, is_terminal
 from src.agent.tools import update_case
+from src.agent.tools import read_audit, read_cases  # PR 12: read-only tools (I67, I69)
 from src.agent.tools.errors import DuplicateSubmissionError, ToolError
+from src.agent.tools.errors import ToolInputError  # PR 12: unknown case in get_case_view
 from src.agent.tools.intake_case import intake_case
 from src.agent.tools.retrieve_case_evidence import retrieve_case_evidence
 from src.agent.tools.score_transaction import ScoringModel, score_transaction
@@ -35,6 +42,7 @@ from src.agent.tools.validate_investigation_json import validate_investigation_j
 from src.agent.tools.write_audit_event import write_audit_event
 from src.config import AppConfig
 from src.data.case_input import CaseInput, parse_case_input
+from src.data.case_input import FEATURE_FIELDS  # PR 12: the 7 verified fields of the view
 
 # Step names = the values allowed by the CHECK of step_results.step (section 10.2).
 STEP_SCORE = "score"
@@ -376,3 +384,84 @@ def _outcome(conn, case_id: str, config: AppConfig,
         failure_cause=failure_cause,
         validation_reasons=tuple(validation.result["reasons"]) if validation is not None else (),
     )
+
+
+# --- read-only API for the UI (J06, PR 12, decisions I67, I69) --------------------------------------
+# None of these functions writes: no state, no step result, no priority, no audit event (a read is
+# not audited, it would be an INSERT). They read through update_case.get_case / get_step (like
+# _outcome) and the read_only tools read_cases.py and read_audit.py — never src.storage or src.audit.
+
+# Order of the review queue = the G11 priorities, from routing_policy.py constants (I60): nothing is
+# recomputed, the stored priority is sorted. Same priority -> oldest first, then case_id (I69 (3)).
+_QUEUE_RANK = {PRIORITY_HIGH: 0, PRIORITY_NORMAL: 1}
+
+
+class MissingPriorityError(RuntimeError):
+    """A case in HUMAN_REVIEW has no priority, or one outside the policy: its place in the queue is
+    never guessed (I69 (4)). Should not happen: the priority is stored before the transition."""
+
+    def __init__(self, case_id: str) -> None:
+        super().__init__(f"Case in human review without a valid priority: {case_id}")
+        self.case_id = case_id
+
+
+@dataclass(frozen=True)
+class CaseView:
+    """What the case page shows (J03, J04): the same view as run_case, plus the 7 verified fields.
+
+    `outcome` is built by _outcome(), the one way to build a case view (I69 (5)); its failure_cause
+    is always None here (the cause of a failure is in the audit trail: J07, interface PR).
+    The case note is NOT in the view: it is untrusted data (I55, I69 (6)).
+    """
+
+    outcome: CaseOutcome
+    transaction: dict[str, Any]  # exactly FEATURE_FIELDS, in that order; never a label
+
+
+@dataclass(frozen=True)
+class QueueItem:
+    """One line of the review queue (J08). No transaction and no case note."""
+
+    case_id: str
+    priority: str
+    created_at: str
+
+
+def get_case_view(case_id: str, *, conn, config: AppConfig) -> CaseView:
+    """Return the view of a stored case. Raises ToolInputError for an unknown case (P1)."""
+    record = update_case.get_case(conn, case_id)
+    if record is None:
+        raise ToolInputError(f"Unknown case: {case_id}")
+    # Field by field from FEATURE_FIELDS, never a copy of the stored dict: a key that is not one of
+    # the 7 verified fields (e.g. a label) cannot reach the view, even if it were stored.
+    transaction = {name: record.transaction[name] for name in FEATURE_FIELDS}
+    return CaseView(outcome=_outcome(conn, case_id, config), transaction=transaction)
+
+
+def _queue_key(record) -> tuple[int, str, str]:
+    """Sort key: G11 priority, then created_at (oldest first), then case_id (I69 (3), (4))."""
+    if record.priority not in _QUEUE_RANK:
+        raise MissingPriorityError(record.case_id)
+    return (_QUEUE_RANK[record.priority], record.created_at, record.case_id)
+
+
+def list_review_queue(*, conn) -> list[QueueItem]:
+    """Return the cases in HUMAN_REVIEW, high priority first (G11, J08).
+
+    Raises MissingPriorityError if one of them has no valid priority (I69 (4)).
+    """
+    records = read_cases.list_cases_in_state(conn, CaseState.HUMAN_REVIEW)
+    return [QueueItem(case_id=r.case_id, priority=r.priority, created_at=r.created_at)
+            for r in sorted(records, key=_queue_key)]
+
+
+def get_audit_events(case_id: str | None = None, *, conn) -> list:
+    """Return the audit events (audit_repository.StoredAuditEvent) of one case, or of every case if
+    `case_id` is None, in event_id order. Checked like an export (I69 (7)): an event with a label,
+    a secret-looking key or a non-finite number raises ToolInputError (the value is never shown)."""
+    return read_audit.read_events(conn, case_id)
+
+
+def export_audit(fmt: str, case_id: str | None = None, *, conn) -> str:
+    """Return the audit of one case (or of every case) as CSV or JSON text (I02, J06)."""
+    return read_audit.export_events(conn, fmt, case_id)

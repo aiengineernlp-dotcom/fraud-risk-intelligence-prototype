@@ -47,6 +47,7 @@ from src.storage.case_repository import (
     create_case,
     get_case,
     get_step_result,
+    list_cases_in_state,
     save_step_result,
     set_priority,
     update_state,
@@ -750,3 +751,53 @@ def test_audit_export_after_run_case(db_conn, tmp_path, scoring_model):
         s.event_id for s in read]
     for text in (export_audit(db_conn, "csv"), export_audit(db_conn, "json")):
         assert not any(label in text for label in LABEL_KEYS)
+
+
+# --- list_cases_in_state (J5, PR 12, decision I69 (2)) — read-only addition to n° 34 --------------
+
+
+def _cases_in_three_states(conn: sqlite3.Connection) -> None:
+    create_case(conn, "CASE-1", CaseState.RECEIVED, TRANSACTION, "note 1")
+    create_case(conn, "CASE-2", CaseState.RECEIVED, TRANSACTION)
+    create_case(conn, "CASE-3", CaseState.RECEIVED, TRANSACTION)
+    update_state(conn, "CASE-2", CaseState.HUMAN_REVIEW)
+    update_state(conn, "CASE-3", CaseState.HUMAN_REVIEW)
+    # CASE-1 stays RECEIVED; a FAILED case too:
+    create_case(conn, "CASE-4", CaseState.RECEIVED, TRANSACTION)
+    update_state(conn, "CASE-4", CaseState.FAILED)
+
+
+def test_list_cases_in_state_returns_only_that_state(db_conn):
+    _cases_in_three_states(db_conn)
+    assert sorted(c.case_id for c in list_cases_in_state(db_conn, CaseState.HUMAN_REVIEW)) == [
+        "CASE-2", "CASE-3"]
+    assert [c.case_id for c in list_cases_in_state(db_conn, CaseState.RECEIVED)] == ["CASE-1"]
+    assert [c.case_id for c in list_cases_in_state(db_conn, CaseState.FAILED)] == ["CASE-4"]
+
+
+def test_list_cases_in_state_empty(db_conn):
+    assert list_cases_in_state(db_conn, CaseState.HUMAN_REVIEW) == []
+    _cases_in_three_states(db_conn)
+    assert list_cases_in_state(db_conn, CaseState.CLOSED) == []
+
+
+def test_list_cases_in_state_returns_case_records(db_conn):
+    _cases_in_three_states(db_conn)
+    for record in list_cases_in_state(db_conn, CaseState.HUMAN_REVIEW):
+        assert record == get_case(db_conn, record.case_id)  # same record as a single read
+
+
+def test_list_cases_in_state_is_read_only(db_conn):
+    _cases_in_three_states(db_conn)
+    before = db_conn.total_changes
+    statements = _sql_statements(
+        db_conn, lambda: list_cases_in_state(db_conn, CaseState.HUMAN_REVIEW))
+    assert db_conn.total_changes == before
+    assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+
+
+def test_list_cases_in_state_never_returns_a_label(db_conn):
+    _cases_in_three_states(db_conn)
+    for state in CaseState:
+        for record in list_cases_in_state(db_conn, state):
+            assert not LABEL_COLUMNS & set(record.transaction)
