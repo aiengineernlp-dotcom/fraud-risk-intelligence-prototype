@@ -8,10 +8,13 @@ Responsibility : Move one case from state to state in the fixed order of the bri
                  G11 priority, audit events and audit export, through read tools only
                  — and the write API for the UI (J05, J09): reviewer decision, case submission,
                  start-up checks (model loaded once) and one database connection per run
+                 — and the UI helpers (PR 14): load_app, demo case selection, case note, failure
+                 cause, draft view, audit rows (display shapes only, nothing decided)
 Never does     : Compute the score, the risk band, the priority or the validity of a draft (the
                  tools, routing_policy.py and the validator do); touch the database without a tool
                  (update_case, intake_case, write_audit_event — Q-28); wrap a writing tool in
-                 retry.py; read .env; any financial action
+                 retry.py; read .env itself (load_config does it, once, in load_app — I73 (2));
+                 any financial action
 Reference      : Architecture_Projet.md v1.3 — section 1.2, section 3 (Flux 1, 2a, 2b),
                  section 3bis, section 5, section 8 (n° 63), section 10.2; Features_Complet.md G03,
                  G10, G11; brief §11.3, §11.6; PASSATION.md §6, Q-05, Q-28, decisions PR 9 and PR 10
@@ -19,6 +22,8 @@ Reference      : Architecture_Projet.md v1.3 — section 1.2, section 3 (Flux 1,
                  J08; decisions I67 (read_audit tool), I69
                  — write API (PR 13): Architecture §3 Flux 1, §3bis; Features J05, J09, I01;
                  decisions I71, Q-12, Q-19 (4), Q-38
+                 — UI helpers (PR 14): Architecture §1.2, §5, §8 (n° 66 to 69); Features J01 to
+                 J09; brief §13; decisions I72, I73, I74
 """
 
 from __future__ import annotations
@@ -53,6 +58,9 @@ from src.agent.llm.factory import create_llm_client  # PR 13: start_app builds m
 from src.agent.llm.fake_client import DraftFacts  # PR 13: facts given to the fake client
 from src.agent.tools.score_transaction import load_scoring_model  # PR 13: start_app (Q-19 (4))
 from src.agent.tools.errors import ToolUnavailableError  # PR 13: model missing at start-up
+import json  # PR 14: draft view and audit rows (display shapes only)
+from src.agent.tools import read_demo_cases  # PR 14: demo case selection (I73 (4))
+from src.config import ConfigError, load_config  # PR 14: load_app (I72 D3, I74 P4)
 
 # Step names = the values allowed by the CHECK of step_results.step (section 10.2).
 STEP_SCORE = "score"
@@ -426,6 +434,11 @@ class CaseView:
 
     outcome: CaseOutcome
     transaction: dict[str, Any]  # exactly FEATURE_FIELDS, in that order; never a label
+    # PR 14 (I72 D2, I73 (3), I74 P5): shown on the case page. The note stays out (I69 (6)).
+    reviewer_decision: CaseState | None = None
+    reviewer_comment: str | None = None  # plain text, shown with st.text only (never in the audit)
+    model_name: str | None = None        # from model_version "{model_name}@{saved_at}"
+    trained_at: str | None = None        # None when model_version has another format
 
 
 @dataclass(frozen=True)
@@ -445,7 +458,13 @@ def get_case_view(case_id: str, *, conn, config: AppConfig) -> CaseView:
     # Field by field from FEATURE_FIELDS, never a copy of the stored dict: a key that is not one of
     # the 7 verified fields (e.g. a label) cannot reach the view, even if it were stored.
     transaction = {name: record.transaction[name] for name in FEATURE_FIELDS}
-    return CaseView(outcome=_outcome(conn, case_id, config), transaction=transaction)
+    outcome = _outcome(conn, case_id, config)  # PR 14: reviewer fields and model name / date added
+    model_name, trained_at = (split_model_version(outcome.score.model_version)
+                              if outcome.score is not None else (None, None))
+    return CaseView(outcome=outcome, transaction=transaction,
+                    reviewer_decision=record.reviewer_decision,
+                    reviewer_comment=record.reviewer_comment,
+                    model_name=model_name, trained_at=trained_at)
 
 
 def _queue_key(record) -> tuple[int, str, str]:
@@ -580,3 +599,143 @@ def record_review_decision(case_id: str, decision: CaseState, comment: str | Non
             details={"comment_length": len(stored_comment or "")},
         ))
     return get_case_view(case_id, conn=conn, config=config)
+
+
+# --- UI helpers (PR 14, decisions I72, I73, I74) ----------------------------------------------------
+# Display shapes only: nothing here computes a score, a band, a priority or a validity. Reads go
+# through tools (update_case.get_case, read_audit, read_demo_cases); the only write is submit_case.
+
+# Fixed message: never the text of the original error (I74 P4).
+STARTUP_CONFIG_MESSAGE = "The configuration (configs/settings.yaml or .env) is missing or invalid"
+
+# One source for the comment limit (I74 P8): case_repository.py, re-exported by update_case.py.
+REVIEWER_COMMENT_MAX_CHARS = update_case.REVIEWER_COMMENT_MAX_CHARS
+
+# The 3 reviewer decisions, in the order of the case page (brief §13 element 10).
+REVIEW_DECISIONS = (CaseState.CLOSED, CaseState.ESCALATED, CaseState.NEEDS_MORE_INFORMATION)
+
+
+@dataclass(frozen=True)
+class DraftEvidenceLine:
+    """One evidence line of the draft, linked to the evidence list (brief §13 element 7)."""
+
+    source_id: str
+    note: str
+    evidence_text: str | None  # the approved evidence with this source_id; None if not in the list
+
+
+@dataclass(frozen=True)
+class DraftView:
+    """The validated draft, read for display (brief §13 elements 6 to 8, I74 P1). LLM text: the
+    page shows every field with st.text, never as Markdown."""
+
+    summary: str
+    evidence_lines: tuple[DraftEvidenceLine, ...]
+    source_references: tuple[tuple[str, str | None], ...]  # (source_id, evidence text or None)
+    uncertainties: tuple[str, ...]
+    recommended_review_steps: tuple[str, ...]
+
+
+def load_app() -> AppResources:
+    """start_app(load_config()) — called once by the UI and cached there (I72 D3).
+
+    A missing or invalid configuration -> AppStartupError with a fixed message (I74 P4); a missing
+    model -> AppStartupError from start_app (Q-19 (4)). No database is opened here.
+    """
+    try:
+        config = load_config()
+    except ConfigError:
+        config = None
+    if config is None:  # raised outside the except: no chained error, no original text
+        raise AppStartupError(STARTUP_CONFIG_MESSAGE)
+    return start_app(config)
+
+
+def split_model_version(model_version: str) -> tuple[str, str | None]:
+    """"{model_name}@{saved_at}" (score_transaction.py) -> (model_name, saved_at).
+
+    Any other format (no "@", several "@", an empty side) -> (model_version as it is, None): shown
+    as it is, never an error (I73 (3)).
+    """
+    name, _, saved_at = model_version.partition("@")
+    if model_version.count("@") == 1 and name and saved_at:
+        return name, saved_at
+    return model_version, None
+
+
+def get_case_note(case_id: str, *, conn) -> str | None:
+    """The case note, the only way it reaches the UI (I73 (1)): untrusted data, shown as plain text.
+    Raises ToolInputError for an unknown case."""
+    record = update_case.get_case(conn, case_id)
+    if record is None:
+        raise ToolInputError(f"Unknown case: {case_id}")
+    return record.case_note
+
+
+def get_failure_cause(case_id: str, *, conn) -> dict[str, str] | None:
+    """For a FAILED case: {"step", "cause"} of the last transition to FAILED, read in the audit
+    (I72 D4, J07). Any other state -> None. Raises ToolInputError for an unknown case."""
+    record = update_case.get_case(conn, case_id)
+    if record is None:
+        raise ToolInputError(f"Unknown case: {case_id}")
+    if record.state is not CaseState.FAILED:
+        return None
+    for stored in reversed(read_audit.read_events(conn, case_id)):
+        event = stored.event
+        if event.action == "transition" and event.state_to is CaseState.FAILED:
+            details = event.details or {}
+            return {"step": str(details.get("step", "")), "cause": str(details.get("cause", ""))}
+    return None
+
+
+def get_draft_view(case_id: str, *, conn, config: AppConfig) -> DraftView | None:
+    """The draft of a case in human review (or later), read for display, each reference linked to
+    the evidence list (I74 P1). No trusted draft (rejected, failed, not drafted yet) -> None.
+
+    The draft was validated before it was stored; an unreadable one still gives None (never shown).
+    """
+    outcome = get_case_view(case_id, conn=conn, config=config).outcome
+    if outcome.draft is None:
+        return None
+    evidence_text = {item.source_id: item.text for item in (outcome.evidence or ())}
+    try:
+        data = json.loads(outcome.draft)
+        return DraftView(
+            summary=str(data["summary"]),
+            evidence_lines=tuple(
+                DraftEvidenceLine(source_id=str(line["source_id"]), note=str(line["note"]),
+                                  evidence_text=evidence_text.get(line["source_id"]))
+                for line in data["evidence"]),
+            source_references=tuple((str(source_id), evidence_text.get(source_id))
+                                    for source_id in data["source_ids"]),
+            uncertainties=tuple(str(text) for text in data["uncertainties"]),
+            recommended_review_steps=tuple(str(text) for text in data["recommended_review_steps"]),
+        )
+    except (ValueError, KeyError, TypeError):  # json.JSONDecodeError is a ValueError
+        return None
+
+
+def get_audit_rows(case_id: str | None = None, *, conn) -> list[dict[str, str]]:
+    """The audit as table rows (I74 P2): read from the JSON export, so the same events, the same
+    columns and the same order as the CSV / JSON export (I02). `details` as JSON text, None -> ""."""
+    rows = []
+    for record in json.loads(read_audit.export_events(conn, "json", case_id)):
+        row = {}
+        for column, value in record.items():
+            if column == "details" and value is not None:
+                value = json.dumps(value, sort_keys=True, ensure_ascii=False)
+            row[column] = "" if value is None else str(value)
+        rows.append(row)
+    return rows
+
+
+def list_demo_cases(*, app: AppResources) -> list[str]:
+    """The IDs of the synthetic demo cases (brief §13 element 1): the page sees IDs only (I73 (4))."""
+    return read_demo_cases.list_demo_case_ids(app.config.paths.demo_cases)
+
+
+def submit_demo_case(case_id: str, *, conn, app: AppResources) -> CaseOutcome:
+    """Run one demo case: its raw data is read by the read_demo_cases tool, then submit_case.
+    Unknown ID -> ToolInputError, nothing created. Second submission -> the same case (J09)."""
+    raw_case = read_demo_cases.get_demo_case(app.config.paths.demo_cases, case_id)
+    return submit_case(raw_case, conn=conn, app=app)

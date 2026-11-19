@@ -1209,3 +1209,216 @@ def test_record_review_decision_without_comment_length_zero(db_conn, orch_config
     row = db_conn.execute("SELECT reviewer_comment FROM cases WHERE case_id = ?",
                           (ORCH_CASE,)).fetchone()
     assert row["reviewer_comment"] is None
+
+
+# --- UI helpers (J5, PR 14, decisions I72, I73, I74) ----------------------------------------------
+
+from src.agent.domain import REVIEWER_OUTCOMES  # noqa: E402  (PR 14 tests only)
+from src.config import ConfigError  # noqa: E402
+from src.storage.case_repository import REVIEWER_COMMENT_MAX_CHARS  # noqa: E402  (I74 P8 check)
+
+
+def _broken_score(monkeypatch):
+    def broken(model, case_input):
+        raise ToolUnavailableError("down")
+    monkeypatch.setattr(orchestrator, "score_transaction", broken)
+
+
+def test_load_app_is_start_app_of_load_config(monkeypatch):
+    """I72 D3: load_app() = start_app(load_config()); load_config replaced (never the real .env)."""
+    calls = []
+    sentinel_config, sentinel_app = object(), object()
+    monkeypatch.setattr(orchestrator, "load_config", lambda: calls.append("load") or sentinel_config)
+    monkeypatch.setattr(orchestrator, "start_app",
+                        lambda config: calls.append(("start", config)) or sentinel_app)
+    assert orchestrator.load_app() is sentinel_app
+    assert calls == ["load", ("start", sentinel_config)]
+
+
+def test_load_app_config_error_is_startup_error(monkeypatch):
+    """I74 P4: ConfigError -> AppStartupError with the fixed message, no chained error, no start."""
+    def broken():
+        raise ConfigError("SECRET-PATH-42 is wrong")
+    started = []
+    monkeypatch.setattr(orchestrator, "load_config", broken)
+    monkeypatch.setattr(orchestrator, "start_app", lambda config: started.append(config))
+    with pytest.raises(orchestrator.AppStartupError) as caught:
+        orchestrator.load_app()
+    assert str(caught.value) == orchestrator.STARTUP_CONFIG_MESSAGE
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+    assert started == []
+
+
+@pytest.mark.parametrize("model_version, expected", [
+    ("random_forest@2026-11-11T19:41:45+00:00", ("random_forest", "2026-11-11T19:41:45+00:00")),
+    ("m@t", ("m", "t")),
+    ("no_separator", ("no_separator", None)),
+    ("a@b@c", ("a@b@c", None)),
+    ("@2026-11-11", ("@2026-11-11", None)),
+    ("random_forest@", ("random_forest@", None)),
+    ("", ("", None)),
+])
+def test_split_model_version(model_version, expected):
+    """I73 (3): "{model_name}@{saved_at}" split; any other format kept as it is, never an error."""
+    assert orchestrator.split_model_version(model_version) == expected
+
+
+def test_case_view_has_model_name_and_training_date(db_conn, orch_config, scoring_model):
+    _run(db_conn, orch_config, scoring_model)
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    name, saved_at = view.outcome.score.model_version.split("@")
+    assert (view.model_name, view.trained_at) == (name, saved_at)
+    assert view.reviewer_decision is None and view.reviewer_comment is None
+
+
+def test_case_view_without_score_has_no_model_fields(db_conn, orch_config, scoring_model, monkeypatch):
+    _broken_score(monkeypatch)
+    _run(db_conn, orch_config, scoring_model)
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    assert view.outcome.score is None and view.model_name is None and view.trained_at is None
+
+
+def test_case_view_shows_reviewer_decision_and_comment(db_conn, orch_config, scoring_model):
+    """I72 D2: after the decision, the view has the decision and the comment (not the audit)."""
+    _run(db_conn, orch_config, scoring_model)
+    view = orchestrator.record_review_decision(ORCH_CASE, CaseState.ESCALATED, "Check **this** <b>",
+                                               conn=db_conn, config=orch_config)
+    assert view.reviewer_decision is CaseState.ESCALATED
+    assert view.reviewer_comment == "Check **this** <b>"
+    assert "Check **this**" not in orchestrator.export_audit("json", conn=db_conn)
+
+
+def test_get_case_note(db_conn, orch_config, scoring_model):
+    """I73 (1): the note through its own function; still never in the case view (I69 (6))."""
+    _run(db_conn, orch_config, scoring_model, raw=_raw_case(case_note="TRAP-NOTE-UI-7"))
+    assert orchestrator.get_case_note(ORCH_CASE, conn=db_conn) == "TRAP-NOTE-UI-7"
+    view = orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    assert "TRAP-NOTE-UI-7" not in repr(view)
+
+
+def test_get_case_note_absent_and_unknown(db_conn, orch_config, scoring_model):
+    raw = _raw_case()
+    del raw["case_note"]
+    _run(db_conn, orch_config, scoring_model, raw=raw)
+    assert orchestrator.get_case_note(ORCH_CASE, conn=db_conn) is None
+    with pytest.raises(ToolInputError):
+        orchestrator.get_case_note("CASE-9999", conn=db_conn)
+
+
+def test_get_failure_cause_of_a_failed_case(db_conn, orch_config, scoring_model, monkeypatch):
+    """I72 D4, J07: read in the audit, exactly {step, cause} of the transition to FAILED."""
+    _broken_score(monkeypatch)
+    outcome = _run(db_conn, orch_config, scoring_model)
+    assert outcome.state is CaseState.FAILED
+    assert orchestrator.get_failure_cause(ORCH_CASE, conn=db_conn) == outcome.failure_cause
+    assert outcome.failure_cause == {"step": "score", "cause": "score_transaction:failed"}
+
+
+def test_get_failure_cause_none_when_not_failed(db_conn, orch_config, scoring_model):
+    _run(db_conn, orch_config, scoring_model)  # HUMAN_REVIEW: its last transition has details too
+    assert orchestrator.get_failure_cause(ORCH_CASE, conn=db_conn) is None
+    with pytest.raises(ToolInputError):
+        orchestrator.get_failure_cause("CASE-9999", conn=db_conn)
+
+
+def test_get_failure_cause_is_read_only(db_conn, orch_config, scoring_model, monkeypatch):
+    _broken_score(monkeypatch)
+    _run(db_conn, orch_config, scoring_model)
+    before = db_conn.total_changes
+    orchestrator.get_failure_cause(ORCH_CASE, conn=db_conn)
+    orchestrator.get_case_note(ORCH_CASE, conn=db_conn)
+    orchestrator.get_audit_rows(conn=db_conn)
+    assert db_conn.total_changes == before
+
+
+def test_get_draft_view_links_references_to_evidence(db_conn, orch_config, scoring_model):
+    """I74 P1: every reference of the draft linked to the approved evidence list (element 7)."""
+    _run(db_conn, orch_config, scoring_model)
+    draft = orchestrator.get_draft_view(ORCH_CASE, conn=db_conn, config=orch_config)
+    stored = json.loads(orchestrator.get_case_view(ORCH_CASE, conn=db_conn, config=orch_config)
+                        .outcome.draft)
+    texts = {item["source_id"]: item["text"] for item in ORCH_EVIDENCE}
+    assert draft.summary == stored["summary"]
+    assert draft.uncertainties == tuple(stored["uncertainties"])
+    assert draft.recommended_review_steps == tuple(stored["recommended_review_steps"])
+    assert [line.source_id for line in draft.evidence_lines] == [e["source_id"] for e in stored["evidence"]]
+    assert all(line.evidence_text == texts[line.source_id] for line in draft.evidence_lines)
+    assert draft.source_references == tuple((sid, texts[sid]) for sid in stored["source_ids"])
+
+
+def test_get_draft_view_none_without_trusted_draft(db_conn, orch_config, scoring_model):
+    _run(db_conn, orch_config, scoring_model, maker=_FakeMaker("prohibited_claim"))
+    assert orchestrator.get_draft_view(ORCH_CASE, conn=db_conn, config=orch_config) is None
+
+
+def test_get_draft_view_unreadable_draft_is_none(db_conn, orch_config, scoring_model):
+    _run(db_conn, orch_config, scoring_model)
+    with db_conn:  # plain SQL: a stored draft that is not the validated JSON (should not happen)
+        db_conn.execute("UPDATE step_results SET result_json = ? WHERE case_id = ? AND step = 'draft'",
+                        (json.dumps({"text": "not json {"}), ORCH_CASE))
+    assert orchestrator.get_draft_view(ORCH_CASE, conn=db_conn, config=orch_config) is None
+
+
+def test_get_audit_rows_match_the_export(db_conn, orch_config, scoring_model):
+    """I74 P2: same events, columns and order as the CSV and JSON exports (I02)."""
+    import csv
+    import io
+    _run(db_conn, orch_config, scoring_model)
+    _run(db_conn, orch_config, scoring_model, raw=_raw_case(case_id="CASE-0002"))
+    for case_id in (None, ORCH_CASE):
+        rows = orchestrator.get_audit_rows(case_id, conn=db_conn)
+        csv_rows = list(csv.reader(io.StringIO(orchestrator.export_audit("csv", case_id, conn=db_conn))))
+        json_rows = json.loads(orchestrator.export_audit("json", case_id, conn=db_conn))
+        assert len(rows) == len(csv_rows) - 1 == len(json_rows) > 0
+        assert all(list(row) == csv_rows[0] for row in rows)
+        assert [row["event_id"] for row in rows] == [str(r["event_id"]) for r in json_rows]
+        assert all(isinstance(value, str) for row in rows for value in row.values())
+    assert orchestrator.get_audit_rows("CASE-9999", conn=db_conn) == []
+
+
+def _demo_app(orch_config, tmp_path, scoring_model_files, cases):
+    demo = tmp_path / "demo_cases.json"
+    demo.write_text(json.dumps({"cases": cases}), encoding="utf-8")
+    config = _app_config(orch_config, tmp_path, scoring_model_files["pipeline"],
+                         scoring_model_files["metadata"])
+    config = dataclasses.replace(config, paths=dataclasses.replace(config.paths, demo_cases=demo))
+    return orchestrator.start_app(config)
+
+
+def test_list_demo_cases_ids_only(orch_config, tmp_path, scoring_model_files):
+    app = _demo_app(orch_config, tmp_path, scoring_model_files,
+                    [_raw_case("CASE-0002"), _raw_case(ORCH_CASE)])
+    assert orchestrator.list_demo_cases(app=app) == ["CASE-0002", ORCH_CASE]
+
+
+def test_submit_demo_case_runs_the_file_case(db_conn, orch_config, tmp_path, scoring_model_files):
+    """I73 (4): the raw case is read from the file by the tool; a double submission (J09) creates no
+    second case."""
+    app = _demo_app(orch_config, tmp_path, scoring_model_files, [_raw_case(case_note="From file.")])
+    first = orchestrator.submit_demo_case(ORCH_CASE, conn=db_conn, app=app)
+    assert first.state is CaseState.HUMAN_REVIEW
+    assert orchestrator.get_case_note(ORCH_CASE, conn=db_conn) == "From file."
+    events = _events(db_conn)
+    assert orchestrator.submit_demo_case(ORCH_CASE, conn=db_conn, app=app) == first
+    assert _events(db_conn) == events
+    assert db_conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 1
+
+
+def test_submit_demo_case_unknown_id_creates_nothing(db_conn, orch_config, tmp_path, scoring_model_files):
+    app = _demo_app(orch_config, tmp_path, scoring_model_files, [_raw_case()])
+    with pytest.raises(ToolInputError):
+        orchestrator.submit_demo_case("CASE-9999", conn=db_conn, app=app)
+    assert db_conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 0
+    assert db_conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 0
+
+
+def test_review_decisions_and_comment_limit():
+    """The 3 decisions of the page = REVIEWER_OUTCOMES; one source for the limit (I74 P8)."""
+    assert set(orchestrator.REVIEW_DECISIONS) == REVIEWER_OUTCOMES
+    assert len(orchestrator.REVIEW_DECISIONS) == 3
+    assert (orchestrator.REVIEWER_COMMENT_MAX_CHARS == update_case.REVIEWER_COMMENT_MAX_CHARS
+            == REVIEWER_COMMENT_MAX_CHARS)
+    tree = ast.parse(ORCHESTRATOR_SOURCE.read_text(encoding="utf-8"))
+    assigned = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "REVIEWER_COMMENT_MAX_CHARS" for t in node.targets)]
+    assert len(assigned) == 1 and not isinstance(assigned[0].value, ast.Constant)  # never a copy

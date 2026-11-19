@@ -38,6 +38,7 @@ from src.storage.case_repository import (
     InvalidReviewCommentError,
     InvalidReviewDecisionError,
 )
+from src.storage.case_repository import REVIEWER_COMMENT_MAX_CHARS  # PR 14 (I74 P8): re-exported, one source
 
 # What this tool may change (G12 test): the state, step results and priority of an existing case.
 TOOL_EFFECT = "writes_case"
