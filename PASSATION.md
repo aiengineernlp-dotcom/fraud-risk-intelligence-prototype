@@ -6,8 +6,8 @@
 
 ## 1. OÙ ON EN EST
 - Phase : Phase 1 – J5 Application et tests, **vibe coding contrôlé** (I48 : jusqu'à la fin du projet) — agent de code : Claude Code, en local ; Temps 2 de chaque pull request dans le chat « Capstone · M4 · Phase 1 – J5 application et tests »
-- Arrêtée exactement à : J4 **gelé** (tag `vj4-agent-frozen` sur `d03e99a`, PR #2 à #11 fusionnées, 484 passed, 73 `validation_workflow`) ; Handoff du J5 ✅ (2026-11-18 : 484 passed in 20.25s chez le fondateur) ; correction du fondateur (I63) **fusionnée** : PR #12 (`fix/vj4-fix1-porte-g2`), `main` = `e2709ab`, tag `vj4-fix1` posé par le fondateur (vérifié par `git ls-remote`), 484 passed ; **PR 11 (I02) finie dans sa branche, À VÉRIFIER** : n° 65 `audit_export.py`, `list_all_events` et `secret_keys_in` dans n° 35 (I64), 37 tests dans n° 70, 13 mutations prouvées ; 527 passed, 73 `validation_workflow`
-- Branche / pull request : `tache/I02-audit-export` (depuis `main` `e2709ab`), commits `e7f38fa` (passation §1 §3), `7eebe84` (n° 35), `fd755df` (n° 65 + tests) + passation finale ; poussée ; pull request à ouvrir par le fondateur — CI attendue : `tests` vert, `protected-paths` vert (aucun fichier protégé touché)
+- Arrêtée exactement à : J4 **gelé** (tag `vj4-agent-frozen` sur `d03e99a`, PR #2 à #11 fusionnées, 484 passed, 73 `validation_workflow`) ; Handoff du J5 ✅ (2026-11-18 : 484 passed in 20.25s chez le fondateur) ; correction du fondateur (I63) **fusionnée** : PR #12 (`fix/vj4-fix1-porte-g2`), `main` = `e2709ab`, tag `vj4-fix1` posé par le fondateur (vérifié par `git ls-remote`), 484 passed ; PR 11 (I02) **fusionnée** : PR #13, `main` = `215f593`, 527 passed (Q-34 : 7 écarts acceptés, I66) ; **PR 12 (J06) en cours** : fonctions publiques de lecture de l'orchestrateur (I67 option B, I69) — plan validé, rien d'écrit encore hors passation
+- Branche / pull request : `tache/J06-api-lecture` (depuis `main` `215f593`) ; premier commit = cette passation ; pull request à ouvrir par le fondateur
 - Décisions J3 à ne pas rediscuter : découpage stratifié 70/15/15, graine 42 dans `configs/settings.yaml` (I34) ; 12 variables (I36) ; Random Forest choisie sur la PR-AUC de validation (I09) ; seuil 0,5492 pour 300 cas/jour, marge 0,05 (I08) ; permutation seule (I10) ; seuil et métadonnées seulement dans `model_metadata.json` (I20)
 - Décisions J4 à ne pas rediscuter : I40 à I62 — surtout I49 (Temps 2 sur les questions de l'énoncé + architecture du vibe coding), I55 (note du cas seulement dans la section de données, non fiable), I56 (un seul essai côté client LLM, jamais de nouvelle tentative sur `kind="auth"`), I60 (`priority` high / normal + `request_information`), I62 (PR 11 au J5) ; Q-28 (un seul outil écrit le cas : `update_case.py`) ; preuve par mutation de chaque point sensible (AS-40)
 - Ouvert : date de remise à reconfirmer (Q-01 rouverte : la date d'I42, 15 nov., est passée) ; Q-12 (threads de Streamlit), Q-14 (décision du relecteur : `record_review_decision`), Q-19 (4) (modèle absent → l'application ne démarre pas), longueur maximale de la note, I59 (LLM de la démo), Q-23 (épingler `httpx2`) ; `orchestrator.py` n'a qu'une fonction publique (`run_case`) alors que l'UI en attend 7 (`docs/specs/Architecture_Projet.md` §476) ; manques C2 du J2 (Matrice R049, R055, R061–R074, R064, R082) ; Temps 2 🟡 à reprendre : `00_ritual/Preparation_Questions.md` §0ter (hors dépôt)
@@ -67,8 +67,10 @@
 ## 3. RESTE À FAIRE — dans l'ordre, la prochaine en premier
 - [x] Fondateur : pull request `fix/vj4-fix1-porte-g2` → `main` fusionnée (#12, `e2709ab`) ; tag `vj4-fix1` posé
 - [ ] Fondateur : Q-01 (date de remise) ; Q-23 (épingler `httpx2` ou non)
-- [ ] Fondateur : ouvrir la pull request `tache/I02-audit-export` → `main` (PR 11, I02) ; CI `tests` + `protected-paths` ; Temps 2 ; fusion ; Q-33, Q-34 (§6)
-- [ ] PR suivante : API de l'orchestrateur pour l'UI (les 6 fonctions publiques manquantes, `record_review_decision` et Q-14 🔒, Q-12, Q-19 (4)) — périmètre à confirmer par le fondateur
+- [x] Fondateur : pull request `tache/I02-audit-export` → `main` fusionnée (PR #13, `215f593`) ; Q-34 accepté (I66)
+- [ ] Fondateur : Q-33 (registre §8)
+- [ ] PR 12 (J06, en cours) : `get_audit_events`, `export_audit`, `get_case_view`, `list_review_queue` + outils `read_audit.py`, `read_cases.py` + `list_cases_in_state` 🔒 (I67, I69)
+- [ ] PR 13 : `submit_case`, `record_review_decision` et colonnes du relecteur (Q-14 🔒), Q-12, Q-19 (4), cause d'échec lue dans l'audit (J07)
 - [ ] PR UI : n° 66 à 69 (Streamlit) ; puis fin des n° 70 et 71, n° 72 en dernier (sortie réelle de pytest) ; manques C2 du J2
 - [ ] Freeze J5 (tag `vj5-app-tests-frozen`) ; puis J6 (rapport, présentation, vidéo — écrits par le fondateur avec le chat, pas par l'agent)
 
@@ -187,17 +189,19 @@
 - Q-04 `.claude/settings.local.json` (créé par Claude Code) à ignorer dans `.gitignore` (fichier gelé n° 01 : porte G2, décision du fondateur) — **FAIT** (vj4-fix1, `c003369`)
 
 ## 7. PROCHAINE SÉANCE — LA TÂCHE DU PROCHAIN
-- À faire d'abord par le fondateur : ouvrir et fusionner la pull request `tache/I02-audit-export` (PR 11) ; répondre à Q-33, Q-34 ; `main` à jour.
-- Tâche : **à confirmer par le fondateur** (§3) — prévue : API de l'orchestrateur pour l'UI, les fonctions publiques manquantes (`docs/specs/Architecture_Projet.md` §476 : `get_audit_events`, `export_audit`, `record_review_decision`…), avec Q-14 🔒 (`record_review_decision` dans `case_repository.py`), Q-12 (threads de Streamlit), Q-19 (4) (modèle absent → l'application ne démarre pas), longueur de la note du cas. Le périmètre exact, l'ID de `docs/specs/Features_Complet.md` et le nom de la branche viennent du fondateur. INCONNU tant qu'il ne l'a pas écrit.
+- Tâche en cours (PR 12, `tache/J06-api-lecture`, Features J03, J04, J06, J08 ; Architecture §476) : fonctions publiques de **lecture** de l'orchestrateur pour l'interface — `get_audit_events(case_id=None, *, conn)`, `export_audit(fmt, case_id=None, *, conn)`, `get_case_view(case_id, *, conn, config)` → `CaseView(outcome: CaseOutcome, transaction)`, `list_review_queue(*, conn)` → `QueueItem` (HUMAN_REVIEW, triés par priorité G11 puis `created_at` croissant puis `case_id`) ; outils `src/agent/tools/read_audit.py` et `read_cases.py` (`TOOL_EFFECT = "read_only"`, I67, I69 (1)) ; `list_cases_in_state(conn, state)` dans `case_repository.py` 🔒 (ajout seul, I69 (2)).
+- Décisions I69 : (3) même priorité → `created_at` croissant puis `case_id` ; (4) cas en revue sans priorité → `MissingPriorityError`, jamais une place devinée ; (5) `get_case_view` réutilise `update_case.get_case` / `get_step` via `_outcome` ; (6) `case_note` **pas** dans la vue ; (7) `get_audit_events` passe par `check_events` ; `AuditExportError` → `ToolInputError` ; P1 cas inconnu → `ToolInputError("Unknown case: …")` ; P2 `conn` / `config` en mots-clés ; P3 `CaseView` compose `CaseOutcome`.
+- Hors tâche (PR 13) : `submit_case`, `record_review_decision`, colonnes du relecteur (Q-14), Q-12 (threads Streamlit), Q-19 (4) (modèle absent), `app/`.
+- **Pour la PR de l'interface (J07, I69 (8))** : `CaseView.outcome.failure_cause` vaut **toujours `None` en relecture** (la cause n'est rendue que par l'exécution qui a échoué) ; la cause d'un échec doit être lue dans l'audit (dernière transition vers FAILED, `details` = `{step, cause}`), par l'outil `read_audit.py`.
 - À savoir :
-  - L'export existe : `src.audit.audit_export.export_audit(conn, fmt, case_id=None) -> str` (`fmt` ∈ `FORMATS` = `("csv", "json")` ; `case_id=None` → tous les cas) ; il refuse tout l'export (`AuditExportError`) si `details` a une étiquette, un secret ou un nombre non fini ; il n'écrit jamais rien.
-  - L'orchestrateur n'importe ni `src.storage`, ni `src.audit`, ni `sqlite3` (test `test_orchestrator_never_touches_the_database`) : une fonction `export_audit` de l'orchestrateur devra passer par un outil ou une décision du fondateur (registre §8 : n° 63 « sans `audit_export.py` », Q-32) → contradiction à signaler dans le plan, pas à réparer en silence.
+  - Lecture seule dans toute la PR : aucun INSERT, UPDATE, DELETE nouveau ; aucune lecture n'est auditée (ce serait une écriture).
+  - L'orchestrateur n'importe ni `src.storage`, ni `src.audit`, ni `sqlite3` (test `test_orchestrator_never_touches_the_database`, inchangé).
   - L'audit se lit par `audit_repository.list_events(conn, case_id)` ou `list_all_events(conn)` → `StoredAuditEvent(event_id, event)` (champs dans `.event`).
   - Limite connue : état et audit en deux transactions (§4).
   - Pour chaque point sensible : une mutation qui casse **toutes** ses protections (§5, AS-40).
-- Critère de fin : celui que le fondateur donnera ; au minimum tests verts, les 527 existants toujours verts, `-m validation_workflow` ≥ 73, mutations prouvées, CI verte, branche poussée, `PASSATION.md` à jour dans la branche.
-- À lire d'abord : `AGENTS.md` ; ce fichier ; `docs/specs/Architecture_Projet.md` §8 (n° 63, 66 à 70) ; `src/agent/orchestrator.py` ; `src/audit/audit_export.py`.
-- Préalables : PR 11 fusionnée ; `main` à jour ; `.venv/bin/python -m pytest -q` → 527 passed.
+- Critère de fin : tests verts (527 existants + nouveaux), `-m validation_workflow` = 73 (aucun test marqué en plus), 14 mutations prouvées (M1–M14 du plan), `git diff main` de `case_repository.py` et `orchestrator.py` sans ligne retirée (sauf *Responsibility* du n° 34), branche poussée, `PASSATION.md` à jour ; statut À VÉRIFIER.
+- À lire d'abord : `AGENTS.md` ; ce fichier ; `docs/specs/Architecture_Projet.md` §1.2, §8 (n° 34, 47, 62bis, 63, 65), §476 ; `src/agent/orchestrator.py` ; `src/agent/tools/update_case.py` ; `src/audit/audit_export.py`.
+- Préalables : `main` = `215f593` ; `.venv/bin/python -m pytest -q` → 527 passed (vérifié le 2026-11-19 sur la branche).
 
 ## 8. JOURNAL DES PASSAGES — ajout seul
 | Date | Qui (outil, modèle si connu) | Mode | Ce qui a été fait | Commit / pull request | Statut laissé |
