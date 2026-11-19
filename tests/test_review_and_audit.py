@@ -40,8 +40,14 @@ from src.audit.audit_repository import (
 from src.storage.case_repository import (
     ALLOWED_PRIORITIES,
     LABEL_COLUMNS,
+    REVIEWER_COMMENT_MAX_CHARS,
     CaseNotFoundError,
+    CaseNotInReviewError,
     DuplicateCaseError,
+    InvalidReviewCommentError,
+    InvalidReviewDecisionError,
+    check_reviewer_comment,
+    set_review_decision,
     InvalidPriorityError,
     LabelInCaseError,
     create_case,
@@ -801,3 +807,105 @@ def test_list_cases_in_state_never_returns_a_label(db_conn):
     for state in CaseState:
         for record in list_cases_in_state(db_conn, state):
             assert not LABEL_COLUMNS & set(record.transaction)
+
+
+# --- set_review_decision (J5, PR 13, decisions I71) — write addition to n° 34 🔒 ------------------
+
+
+def _case_in_review(conn: sqlite3.Connection, case_id: str = "CASE-1") -> None:
+    """A case put straight in HUMAN_REVIEW (repository test setup, no state machine here)."""
+    create_case(conn, case_id, CaseState.RECEIVED, TRANSACTION)
+    update_state(conn, case_id, CaseState.HUMAN_REVIEW)
+
+
+@pytest.mark.parametrize("decision", sorted(REVIEWER_OUTCOMES, key=lambda s: s.value))
+def test_set_review_decision_writes_state_decision_comment_together(db_conn, decision):
+    _case_in_review(db_conn)
+    before = get_case(db_conn, "CASE-1")
+    set_review_decision(db_conn, "CASE-1", decision, "Checked the balances.")
+    after = get_case(db_conn, "CASE-1")
+    assert after.state is decision
+    assert after.reviewer_decision is decision
+    assert after.reviewer_comment == "Checked the balances."
+    # Nothing else changes (only updated_at).
+    assert (after.transaction, after.case_note, after.priority, after.created_at) == (
+        before.transaction, before.case_note, before.priority, before.created_at)
+
+
+@pytest.mark.parametrize("bad", [CaseState.FAILED, CaseState.HUMAN_REVIEW, "CLOSED", None])
+def test_set_review_decision_refuses_non_reviewer_outcome(db_conn, bad):
+    _case_in_review(db_conn)
+    before = get_case(db_conn, "CASE-1")
+    with pytest.raises(InvalidReviewDecisionError):
+        set_review_decision(db_conn, "CASE-1", bad, None)
+    assert get_case(db_conn, "CASE-1") == before  # nothing written
+
+
+@pytest.mark.parametrize("state", [CaseState.FAILED, CaseState.CLOSED, CaseState.RECEIVED])
+def test_set_review_decision_only_from_human_review(db_conn, state):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    update_state(db_conn, "CASE-1", state)
+    before = get_case(db_conn, "CASE-1")
+    with pytest.raises(CaseNotInReviewError):
+        set_review_decision(db_conn, "CASE-1", CaseState.ESCALATED, "late click")
+    assert get_case(db_conn, "CASE-1") == before  # the guard touched no row
+
+
+def test_set_review_decision_unknown_case(db_conn):
+    with pytest.raises(CaseNotFoundError):
+        set_review_decision(db_conn, "CASE-404", CaseState.CLOSED, None)
+
+
+def test_set_review_decision_touches_one_case(db_conn):
+    _case_in_review(db_conn, "CASE-1")
+    _case_in_review(db_conn, "CASE-2")
+    other = get_case(db_conn, "CASE-2")
+    set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, "ok")
+    assert get_case(db_conn, "CASE-2") == other
+
+
+def test_set_review_decision_is_one_update(db_conn):
+    """State, decision and comment are written by ONE statement: never a state without its decision."""
+    _case_in_review(db_conn)
+    statements = _sql_statements(
+        db_conn, lambda: set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, "ok"))
+    updates = [s for s in statements if s.lstrip().upper().startswith("UPDATE")]
+    assert len(updates) == 1
+    # The trace shows the bound values (the code sends "?" parameters, sqlite3 expands them here).
+    for part in ("state = 'CLOSED'", "reviewer_decision = 'CLOSED'", "reviewer_comment = 'ok'",
+                 "updated_at = ", "AND state = 'HUMAN_REVIEW'"):
+        assert part in updates[0]
+
+
+@pytest.mark.parametrize("length, accepted", [
+    (REVIEWER_COMMENT_MAX_CHARS, True), (REVIEWER_COMMENT_MAX_CHARS + 1, False)])
+def test_reviewer_comment_length_bounds(db_conn, length, accepted):
+    """I71 (c1): 1000 characters accepted, 1001 refused — never cut."""
+    assert REVIEWER_COMMENT_MAX_CHARS == 1000
+    _case_in_review(db_conn)
+    comment = "a" * length
+    if accepted:
+        set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, comment)
+        assert get_case(db_conn, "CASE-1").reviewer_comment == comment
+    else:
+        before = get_case(db_conn, "CASE-1")
+        with pytest.raises(InvalidReviewCommentError):
+            set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, comment)
+        assert get_case(db_conn, "CASE-1") == before
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
+def test_reviewer_comment_blank_becomes_none(db_conn, blank):
+    assert check_reviewer_comment(blank) is None
+    _case_in_review(db_conn)
+    set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, blank)
+    assert get_case(db_conn, "CASE-1").reviewer_comment is None
+
+
+@pytest.mark.parametrize("bad", [5, True, b"x"])
+def test_reviewer_comment_not_text_refused(db_conn, bad):
+    _case_in_review(db_conn)
+    before = get_case(db_conn, "CASE-1")
+    with pytest.raises(InvalidReviewCommentError):
+        set_review_decision(db_conn, "CASE-1", CaseState.CLOSED, bad)
+    assert get_case(db_conn, "CASE-1") == before
