@@ -1,7 +1,7 @@
 """
 SoC layer      : 2 — Ingestion/Parser
 Responsibility : Append structured audit events (AuditEvent, section 10.2) and read the events of a
-                 case in order (event_id); refuse a secret-looking key in `details`
+                 case, or of all cases, in order (event_id); refuse a secret-looking key in `details`
                  (SecretInAuditError) and a timestamp that is not ISO 8601 UTC
 Never does     : Modify or delete an event (no such function; the database triggers refuse it too);
                  decide anything; build SQL from formatted strings (parameters "?" only)
@@ -134,3 +134,39 @@ def list_events(conn: sqlite3.Connection, case_id: str) -> list[StoredAuditEvent
         )
         for row in rows
     ]
+
+
+# --- Added at J5, PR 11 (I02, decision I64): read-only helpers for the audit export (n° 65) ---
+
+
+def secret_keys_in(value: Any) -> list[str]:
+    """Return the paths of the secret-looking keys in `value` (same rule as append_event).
+
+    Public so that the export (n° 65) applies exactly the same rule, without a copy (I64 (1)).
+    """
+    return _secret_keys(value)
+
+
+def _stored_from_row(row: sqlite3.Row) -> StoredAuditEvent:
+    """Turn one audit_events row into a StoredAuditEvent (used by list_all_events only)."""
+    return StoredAuditEvent(
+        event_id=row["event_id"],
+        event=AuditEvent(
+            case_id=row["case_id"],
+            timestamp=row["timestamp"],
+            actor=row["actor"],
+            action=row["action"],
+            result=row["result"],
+            state_from=CaseState(row["state_from"]) if row["state_from"] else None,
+            state_to=CaseState(row["state_to"]) if row["state_to"] else None,
+            details=json.loads(row["details_json"]) if row["details_json"] else None,
+            model_version=row["model_version"],
+            prompt_version=row["prompt_version"],
+        ),
+    )
+
+
+def list_all_events(conn: sqlite3.Connection) -> list[StoredAuditEvent]:
+    """Return the events of every case, oldest first (ordered by event_id). Reads only."""
+    rows = conn.execute("SELECT * FROM audit_events ORDER BY event_id ASC").fetchall()
+    return [_stored_from_row(row) for row in rows]

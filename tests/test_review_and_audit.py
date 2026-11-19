@@ -17,7 +17,13 @@ import pytest
 from src.agent.domain import REVIEWER_OUTCOMES, AuditEvent, CaseState
 from src.agent.routing_policy import PRIORITIES
 from src.audit import audit_repository
-from src.audit.audit_repository import SecretInAuditError, append_event, list_events
+from src.audit.audit_repository import (
+    SecretInAuditError,
+    append_event,
+    list_all_events,
+    list_events,
+    secret_keys_in,
+)
 from src.storage.case_repository import (
     ALLOWED_PRIORITIES,
     CaseNotFoundError,
@@ -383,3 +389,59 @@ def test_set_priority_touches_one_case(db_conn):
     set_priority(db_conn, "CASE-1", "high")
     assert get_case(db_conn, "CASE-1").priority == "high"
     assert get_case(db_conn, "CASE-2") == other
+
+
+# --- list_all_events and secret_keys_in (J5, PR 11, decision I64) — read-only additions to n° 35 ---
+
+
+def _sql_statements(conn: sqlite3.Connection, action) -> list[str]:
+    """Run `action` and return every SQL statement sent to the database meanwhile."""
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        action()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def test_list_all_events_empty(db_conn):
+    assert list_all_events(db_conn) == []
+
+
+def test_list_all_events_all_cases_in_order(db_conn):
+    for case_id in ("CASE-1", "CASE-2", "CASE-3"):
+        create_case(db_conn, case_id, CaseState.RECEIVED, TRANSACTION)
+    written = [_event(c) for c in ("CASE-2", "CASE-1", "CASE-3", "CASE-1", "CASE-2")]
+    ids = [append_event(db_conn, e) for e in written]
+
+    stored = list_all_events(db_conn)
+    assert [s.event_id for s in stored] == ids == sorted(ids)  # every case, by event_id
+    assert [s.event for s in stored] == written  # every field round-trips
+
+
+def test_list_all_events_reads_only(db_conn):
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    append_event(db_conn, _event())
+    before = db_conn.total_changes
+    statements = _sql_statements(db_conn, lambda: list_all_events(db_conn))
+    assert db_conn.total_changes == before
+    assert statements and all(s.lstrip().upper().startswith("SELECT") for s in statements)
+
+
+@pytest.mark.parametrize(
+    ("details", "paths"),
+    [
+        ({"api_key": "x", "attempt": 1}, ["api_key"]),
+        ({"request": {"headers": {"auth_token": "x"}}}, ["request.headers.auth_token"]),
+        ({"calls": [{"ok": 1}, {"token": "x"}]}, ["calls[1].token"]),
+    ],
+)
+def test_secret_keys_in_matches_append_refusal(db_conn, details, paths):
+    """The export uses secret_keys_in: it must find the very paths append_event refuses."""
+    create_case(db_conn, "CASE-1", CaseState.RECEIVED, TRANSACTION)
+    assert secret_keys_in(details) == paths
+    with pytest.raises(SecretInAuditError) as refused:
+        append_event(db_conn, _event(details=details))
+    assert str(paths) in str(refused.value)
+    assert secret_keys_in({"prompt_tokens": 1, "idempotency_key": "CASE-1:draft"}) == []
