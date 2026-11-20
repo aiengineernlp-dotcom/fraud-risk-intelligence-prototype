@@ -13,10 +13,12 @@ Reference      : Architecture_Projet.md v1.3 — section 8 (n° 71, tests of n°
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -34,7 +36,9 @@ from src.agent.prompt_builder import (
     build_messages,
 )
 from src.agent.validators.investigation_schema import REQUIRED_FIELDS as DRAFT_FIELDS
+from src.config import Secret
 from src.data.case_input import FEATURE_FIELDS, parse_case_input
+from src.logging_setup import setup_logging
 from src.storage.evidence_repository import get_evidence
 
 from scripts import build_demo_cases
@@ -243,3 +247,34 @@ def test_every_demo_case_builds_without_label():
     for case_input in _demo_cases():
         for message in _demo_messages(case_input):
             assert_no_label_nor_identifier(message.content)
+
+
+# --- J5, PR 16 (K02, brief §14 "Secrets are not written to logs.") ----------------------------
+FAKE_KEY = "sk-INVENTED-test-key-0042"  # invented for this test, never a real key
+
+
+def test_secrets_not_logged(capsys):
+    """setup_logging (n° 08) hides the LLM key in every line it writes: message, arguments and
+    traceback. Name taken from the register (n° 08 is tested by this test, n° 71)."""
+    config = SimpleNamespace(llm=SimpleNamespace(api_key=Secret(FAKE_KEY)))  # only field read
+    root = logging.getLogger()
+    level_before = root.level
+    try:
+        setup_logging(config)
+        log = logging.getLogger("tests.secrets")
+        log.info("key in the message: %s", FAKE_KEY)
+        log.warning(f"key in an f-string: {FAKE_KEY}")
+        try:
+            raise ValueError(f"server answered with {FAKE_KEY}")
+        except ValueError:
+            log.exception("call failed")
+        written = capsys.readouterr().err
+    finally:  # never leave the test handler on the root logger
+        for handler in list(root.handlers):
+            if handler.get_name() == "capstone-terminal":
+                root.removeHandler(handler)
+        root.setLevel(level_before)
+    assert "key in the message" in written and "call failed" in written  # the lines were written
+    assert "Traceback" in written
+    assert FAKE_KEY not in written
+    assert written.count("********") >= 3
