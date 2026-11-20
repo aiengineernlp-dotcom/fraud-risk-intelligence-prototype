@@ -420,3 +420,21 @@ def test_llm_package_never_reads_the_environment():
             assert not modules & (forbidden_modules | forbidden_names), f"{modules} imported in {path.name}"
             name = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None
             assert name not in forbidden_names, f"{name} used in {path.name}"
+
+
+# --- J5, PR 16 — I75 (2): summary of a case without any evidence --------------------------------
+@pytest.mark.validation_workflow
+def test_fake_valid_draft_without_evidence_says_none_is_listed():
+    """No evidence -> the summary says that no evidence item is listed and never claims that
+    evidence supports anything; the draft still passes the real validator (n° 52, unchanged).
+    With evidence, the summary keeps its sentence about the listed evidence."""
+    without = json.loads(_fake("valid", evidence=[]).complete(MESSAGES).text)
+    assert "No evidence item is listed for this case" in without["summary"]
+    assert "evidence supports" not in without["summary"]
+    assert without["evidence"] == [] and without["source_ids"] == []
+    result = _validate(json.dumps(without), evidence=[])
+    assert result.passed, result.reasons
+
+    with_evidence = json.loads(_fake("valid").complete(MESSAGES).text)
+    assert "The listed evidence supports a human review" in with_evidence["summary"]
+    assert "No evidence item is listed" not in with_evidence["summary"]

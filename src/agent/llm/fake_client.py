@@ -9,7 +9,7 @@ Never does     : Open a network connection; read the messages to decide what to 
                  label name (isFraud, isFlaggedFraud); wait (the timeout scenario raises at once)
 Reference      : Architecture_Projet.md v1.3 — section 3 (Flux 2a), section 4 (D-05), section 8
                  (n° 56); Features_Complet.md F02; brief §10.2, §10.5; PASSATION.md §5 and §6,
-                 decisions PR 6 (a), (c) and PR 7
+                 decisions PR 6 (a), (c) and PR 7; I75 (2) (summary of a case without evidence)
 """
 
 from __future__ import annotations
@@ -70,6 +70,16 @@ class DraftFacts:
 
 def _valid_draft(facts: DraftFacts) -> dict:
     """A draft that respects every validator rule, with or without evidence."""
+    # I75 (2): never claim that evidence supports anything when no evidence item is listed.
+    if facts.source_ids:
+        evidence_sentence = (
+            "The listed evidence supports a human review; it does not establish wrongdoing."
+        )
+    else:
+        evidence_sentence = (
+            "No evidence item is listed for this case; a human review is needed and the model "
+            "score alone does not establish wrongdoing."
+        )
     return {
         "case_id": facts.case_id,
         "risk_level": facts.risk_band,
@@ -80,8 +90,7 @@ def _valid_draft(facts: DraftFacts) -> dict:
             for source_id in facts.source_ids
         ],
         "summary": (
-            f"The model placed this case in the {facts.risk_band} risk band. "
-            "The listed evidence supports a human review; it does not establish wrongdoing."
+            f"The model placed this case in the {facts.risk_band} risk band. " + evidence_sentence
         ),
         # Always one uncertainty and one review step: required when no evidence is supplied (F07).
         "uncertainties": ["The model score is an estimate and may be wrong for this case."],
