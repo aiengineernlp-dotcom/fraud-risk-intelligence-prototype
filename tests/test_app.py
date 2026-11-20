@@ -527,3 +527,46 @@ def test_pages_never_render_markdown_or_html(path):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             assert node.func.attr not in {"markdown", "write", "html", "exception"}
             assert not [k for k in node.keywords if k.arg == "unsafe_allow_html"]
+
+
+# --- J5, PR 16 — I75 (1): "Case ID" field on the review page opened without a case ---------------
+
+def test_review_page_opens_a_case_by_typed_id(ui_env):
+    """I75 (1): opened from the menu without a case, a typed existing ID opens that case."""
+    _submit(ui_env, "CASE-0901")
+    at = _run(REVIEW)
+    at.text_input(key="open_case_id").input("  CASE-0901  ")  # spaces around are ignored
+    at.button(key="open_case").click().run(timeout=TIMEOUT)
+    assert not at.exception
+    assert at.session_state[ui.CASE_KEY] == "CASE-0901"
+    assert "Case ID: CASE-0901" in _values(at.text)
+    assert "2. Verified transaction fields" in _values(at.subheader)
+
+
+@pytest.mark.parametrize("typed", ["CASE-0999", "not-a-case <b>x</b>"])
+def test_review_page_unknown_typed_id_shows_fixed_message(ui_env, typed):
+    """Unknown or malformed ID -> the fixed ToolInputError message, no trace, the ID never shown
+    and never kept, no case created."""
+    _submit(ui_env, "CASE-0901")  # a database with one other case
+    at = _run(REVIEW)
+    at.text_input(key="open_case_id").input(typed)
+    at.button(key="open_case").click().run(timeout=TIMEOUT)
+    assert not at.exception
+    assert _values(at.error) == [ui.ERROR_MESSAGES["ToolInputError"]]
+    assert typed not in _screen(at)
+    assert ui.CASE_KEY not in at.session_state
+    with ui_env.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("typed", ["", "   "])
+def test_review_page_empty_typed_id_shows_fixed_message(ui_env, typed):
+    """Empty ID -> fixed warning, nothing called (the database is not even opened)."""
+    at = _run(REVIEW)
+    at.text_input(key="open_case_id").input(typed)
+    at.button(key="open_case").click().run(timeout=TIMEOUT)
+    assert not at.exception
+    assert "Enter a case ID to open a case." in _values(at.warning)
+    assert not at.error
+    assert ui.CASE_KEY not in at.session_state
+    assert not ui_env.config.paths.runtime_db.exists()

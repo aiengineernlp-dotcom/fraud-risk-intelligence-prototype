@@ -3,7 +3,8 @@ SoC layer      : 5 — UI
 Responsibility : Case review page: brief §13 elements 2 to 10 for the selected case — verified
                  fields, score + band + threshold, model, evidence, case note (unverified), AI draft
                  for human review with its references, uncertainties, validator status, and the
-                 reviewer decision (J03, J04, J05, J07)
+                 reviewer decision (J03, J04, J05, J07); without a selected case, a "Case ID"
+                 field that opens an existing case (I75 (1))
 Never does     : Import anything but streamlit, the orchestrator and ui_components (I72 D3); read
                  the configuration (app.config is passed on, never read, I74 P3); compute a score, a
                  band, a priority or a validity; show a rejected or failed draft; render the note,
@@ -27,9 +28,26 @@ st.title("Case review")
 
 app = ui.get_app_or_stop(orchestrator.load_app)
 
+EMPTY_CASE_ID_MESSAGE = "Enter a case ID to open a case."
+
 case_id = st.session_state.get(ui.CASE_KEY)
 if not case_id:
     st.info("No case selected: choose or run a case on the Home page.")
+    # Opened from the menu without a case: open an existing case by its ID (I75 (1)).
+    typed_id = st.text_input("Case ID", key="open_case_id").strip()
+    if st.button("Open case", key="open_case"):
+        if not typed_id:
+            st.warning(EMPTY_CASE_ID_MESSAGE)  # fixed message, nothing called
+        else:
+            try:
+                # Check that the case exists BEFORE keeping its ID (unknown ID -> ToolInputError).
+                with orchestrator.open_connection(app.config) as conn:
+                    orchestrator.get_case_view(typed_id, conn=conn, config=app.config)
+            except Exception as error:  # fixed message by class name; the typed ID is never shown
+                ui.show_error(error)
+            else:
+                st.session_state[ui.CASE_KEY] = typed_id
+                st.rerun()  # the page now shows the case
     st.stop()
 
 try:
