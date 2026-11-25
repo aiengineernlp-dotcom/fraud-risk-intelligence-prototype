@@ -472,7 +472,8 @@ def test_get_app_loads_once_and_never_caches_a_failure():
 # --- imports and layers of app/ (I72 D3, I74 P3) ----------------------------------------------------
 
 ALLOWED_APP_IMPORTS = {"__future__", "__future__.annotations", "streamlit","src.agent.orchestrator", "app.ui_components",
-                       "app", "src.agent"}
+                       "app", "src.agent",
+                       "sys", "pathlib", "pathlib.Path"}  # J6: repository root on the import path (hosted demo)
 APP_FILES = sorted(APP_DIR.rglob("*.py"))
 PAGE_FILES = [path for path in APP_FILES if path.name != "ui_components.py"]
 
@@ -495,7 +496,8 @@ def test_app_files_found():
 
 @pytest.mark.parametrize("path", APP_FILES, ids=lambda path: path.name)
 def test_app_imports_only_orchestrator(path):
-    """I72 D3: app/ imports only streamlit, the orchestrator and ui_components (Architecture §1.2)."""
+    """I72 D3: app/ imports only streamlit, the orchestrator and ui_components (Architecture §1.2);
+    sys and pathlib only put the repository root on the import path (J6 hosted demo)."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imports = _imports(tree)
     assert imports <= ALLOWED_APP_IMPORTS | {"typing", "typing.Any", "typing.Callable"}, imports

@@ -5,7 +5,7 @@ Responsibility : Case review page: brief §13 elements 2 to 10 for the selected 
                  for human review with its references, uncertainties, validator status, and the
                  reviewer decision (J03, J04, J05, J07); without a selected case, a "Case ID"
                  field that opens an existing case (I75 (1))
-Never does     : Import anything but streamlit, the orchestrator and ui_components (I72 D3); read
+Never does     : Import anything but streamlit, the orchestrator and ui_components (I72 D3; plus sys and pathlib, only for the import path, J6); read
                  the configuration (app.config is passed on, never read, I74 P3); compute a score, a
                  band, a priority or a validity; show a rejected or failed draft; render the note,
                  the comment or any LLM text as Markdown or HTML (st.text only, I72 D1, D2); show
@@ -17,10 +17,19 @@ Reference      : Architecture_Projet.md v1.5 — section 1.2, section 5, section
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import streamlit as st
 
-from app import ui_components as ui
-from src.agent import orchestrator
+# Repository root on the import path: `streamlit run app/Home.py` (Streamlit Community Cloud) adds
+# only app/ to it, unlike the local `python -m streamlit run` (J6 hosted demo, outside the brief).
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app import ui_components as ui  # noqa: E402
+from src.agent import orchestrator  # noqa: E402
 
 st.set_page_config(page_title="Case review — prototype", layout="wide")
 ui.show_banner()
