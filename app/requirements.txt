@@ -1,0 +1,29 @@
+# -----------------------------------------------------------------------------
+# SoC layer      : Infrastructure
+# Responsibility : Dependencies of the hosted demo only (Streamlit Community Cloud), which reads
+#                  the requirements file next to the entrypoint (app/Home.py) before the root one
+# Never does     : Replace the root requirements.txt (local install, CI); list torch or pytest
+#                  (training and tests only: the app never imports them)
+# Keep in sync   : Same exact versions as the root requirements.txt, minus torch and pytest
+# Reference      : J6 deployment, outside the brief (Journal_Build.md, J6); docs.streamlit.io,
+#                  "App dependencies for your Community Cloud app"
+# -----------------------------------------------------------------------------
+
+# --- Data and classical ML (scoring with the saved pipeline) ------------------
+numpy==2.4.6
+pandas==3.1.0
+scikit-learn==1.9.1
+joblib==1.6.0
+matplotlib==3.11.2
+seaborn==0.13.2
+
+# --- LLM client and draft validation ------------------------------------------
+openai==3.45.0
+pydantic==2.14.2
+
+# --- Configuration ------------------------------------------------------------
+PyYAML==6.0.3
+python-dotenv==1.2.4
+
+# --- Application --------------------------------------------------------------
+streamlit==1.66.1
