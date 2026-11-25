@@ -1,4 +1,4 @@
-> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Donnees_et_Modeles.md, version du 2026-11-11. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
+> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Donnees_et_Modeles.md, version du 2026-11-25. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
 
 # DONNÉES ET MODÈLES — Capstone_Project_1
 > Gabarit : `19_Template_Donnees_et_Modeles.md` (système v2.15.6, gabarit v0) · Document de build (`01_sessions/Build_Control.md`,
@@ -132,7 +132,7 @@ Random Forest, seuil 0,5492, 954 393 lignes dont 1 232 fraudes (`artifacts/metri
 Écart validation → test faible (rappel 0,878 → 0,863 ; précision 0,777 → 0,776) : les choix faits sur la validation se généralisent.
 
 ## 10. ANALYSE DES ERREURS ET EXPLICABILITÉ
-Importance par permutation (I10, D-11 ; colonnes brutes, validation, score PR-AUC ; fig09). Valeurs du Temps 1 (RF, 200 000 lignes) : `oldbalanceOrg` 0,78 · `type` 0,76 · `amount` 0,41 · `newbalanceDest` 0,33 · `newbalanceOrig` 0,15 · `oldbalanceDest` 0,14 · `step` 0,06. **Importance ≠ cause** : c'est ce dont le modèle dépend.
+Importance par permutation (I10, D-11 ; colonnes brutes, validation, score PR-AUC ; fig09). Valeurs du run complet (modèle final, 100 000 lignes de validation stratifiées, 3 répétitions), lues sur fig09 : `type` ≈ 0,79 · `oldbalanceOrg` ≈ 0,76 · `amount` ≈ 0,50 · `newbalanceDest` ≈ 0,36 · `oldbalanceDest` ≈ 0,25 · `newbalanceOrig` ≈ 0,18 · `step` ≈ 0,06 (corrigé le 2026-11-25 : remplacent les valeurs du Temps 1 sur 200 000 lignes ; même ordre que le rapport technique, section 11). **Importance ≠ cause** : c'est ce dont le modèle dépend.
 Erreurs au seuil (validation, `error_analysis.csv`) : fraudes ratées surtout en **CASH_OUT** (148, montant médian ~103 000, contre ~835 000 pour les attrapées) → le modèle rate surtout les **petites** fraudes ; fausses alertes surtout en CASH_OUT (307). SHAP non réalisé (recommandé, temps). Limite : les erreurs de solde, très fortes, peuvent être un raccourci propre au simulateur (B42).
 
 ## 11. EXPÉRIENCE DE DEEP LEARNING (si demandée)
@@ -143,7 +143,7 @@ MLP PyTorch (I38) : 12 → 32 → 16 → 1, ReLU, dropout 0,1 ; perte `BCEWithLo
 - **Entrées** : 7 colonnes brutes PaySim → 12 variables (§4). **Jamais** : `isFraud`, `isFlaggedFraud`, `nameOrig`, `nameDest`.
 - **Sortie** : un score de fraude entre 0 et 1 ; décision = score ≥ **0,5492** (`model_metadata.json`, I20) ; pas de `predict()` à 0,5.
 - **Usage prévu** : prioriser les cas pour une équipe de ~300 revues/jour ; aide à la décision, jamais décision automatique.
-- **Performances (test, une fois)** : §9. **Limites** : données synthétiques (PaySim) ; raccourci possible des erreurs de solde (B42) ; petites fraudes CASH_OUT moins bien vues ; bornes des bandes de risque fixées au J4 (`risk_band_bounds: null`).
+- **Performances (test, une fois)** : §9. **Limites** : données synthétiques (PaySim) ; raccourci possible des erreurs de solde (B42) ; petites fraudes CASH_OUT moins bien vues ; bornes des bandes de risque dans `model_metadata.json` : high ≥ 0,8516 (seuil à 200 cas/jour), medium ≥ 0,5492 (seuil de décision) — corrigé le 2026-11-25 (`risk_band_bounds: null` était périmé).
 
 ---
 

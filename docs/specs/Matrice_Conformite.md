@@ -1,4 +1,4 @@
-> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Matrice_Conformite.md, version du 2026-11-07. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
+> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Matrice_Conformite.md, version du 2026-11-25. Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
 
 # MATRICE DE CONFORMITÉ — Capstone_Project_1
 
@@ -340,7 +340,7 @@ Remarques de notation (§18.1, pas de pénalité automatique) :
 ### 2.16 Rapport, présentation, vidéo (§15, critère C10) — détail des contenus imposés
 | ID | Exigence (mots exacts de la source) | Source (§ / tableau) | Type | Critère / points | Preuve attendue | Où est la preuve | Statut | Vérifié le |
 |---|---|---|---|---|---|---|---|---|
-| R350 | Rapport, 23 sections : "Executive summary; business problem; stakeholders and requirements; dataset and provenance; EDA; data preparation; feature engineering; traditional ML; Deep Learning; evaluation; explainability; LLM design; agentic architecture; tool design; validation and guardrails; application; testing; security and responsible AI; limitations; recommendations; conclusion; references; individual contribution statement; AI-use statement." | §15 C | Obligatoire | C10 | Table des matières | `reports/` | ⬜ | |
+| R350 | Rapport, **24** sections (« 23 » corrigé le 2026-11-23 : la liste de l'énoncé §15 C en compte 24 ; plan validé par Erman, J6) : "Executive summary; business problem; stakeholders and requirements; dataset and provenance; EDA; data preparation; feature engineering; traditional ML; Deep Learning; evaluation; explainability; LLM design; agentic architecture; tool design; validation and guardrails; application; testing; security and responsible AI; limitations; recommendations; conclusion; references; individual contribution statement; AI-use statement." | §15 C | Obligatoire | C10 | Table des matières | `reports/` | ⬜ | |
 | R351 | Rapport : "All sections are present and consistent with the code. Results match the submitted experiments. References are real." | §15 C | Obligatoire | C10 | Relecture croisée | `reports/` | ⬜ | |
 | R352 | Présentation, 14 contenus : "Business problem; solution overview; dataset; EDA insights; ML approach; model results; error analysis; agentic architecture; LLM grounding and validation; application demo; safety and testing; limitations; recommendations; references." | §15 D | Obligatoire | C10 | Diapositives | `presentation/` | ⬜ | |
 | R353 | Présentation : "Within the slide range; clear, readable, and consistent with the report." | §15 D | Obligatoire | C10 | 10 à 14 diapositives | `presentation/` | ⬜ | |
@@ -375,7 +375,7 @@ Remarques de notation (§18.1, pas de pénalité automatique) :
 |---|---|---|---|---|---|
 | A. Source code repository | "Git repository or archive" | README ; requirements ou environnement ; `.env.example` sans secrets ; instructions d'installation et d'exécution ; code d'entraînement et d'évaluation, application, outils de l'agent, validateur et tests ; instructions de configuration | "A reviewer can set up, train, launch the app and run the tests from the README alone. No credentials or restricted data are committed." | dépôt `capstone-project-1` | ⬜ |
 | B. Data documentation | "Markdown or PDF" | Source et conditions ; dictionnaire et qualité des données ; prétraitement et variables ; stratégie train / validation / test ; reproductibilité | "All items are written from the downloaded copy; the seed and splits are stated." | `data/README.md` | ⬜ |
-| C. Technical report | "PDF or Word, about 2,500 to 4,000 words unless the instructor specifies otherwise" | Les 23 sections de R350 | "All sections are present and consistent with the code. Results match the submitted experiments. References are real." | `reports/` | ⬜ |
+| C. Technical report | "PDF or Word, about 2,500 to 4,000 words unless the instructor specifies otherwise" | Les 24 sections de R350 | "All sections are present and consistent with the code. Results match the submitted experiments. References are real." | `reports/` | ⬜ |
 | D. Presentation deck | "Slides, 10 to 14 slides" | Les 14 contenus de R352 | "Within the slide range; clear, readable, and consistent with the report." | `presentation/` | ⬜ |
 | E. Demo video | "Video, 6 to 10 minutes" | Les 6 éléments de R354 | "All six items are visible on screen and narrated." | lien dans `presentation/` | ⬜ |
 | F. Live presentation and Q&A | "Live session" | Contribution, choix de conception, résultats, limites, workflow agentique | "Each member can explain and defend the work they claim." | — (soutenance) | ⬜ |
