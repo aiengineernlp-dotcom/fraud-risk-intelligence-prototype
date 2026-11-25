@@ -3,7 +3,7 @@ SoC layer      : 5 — UI
 Responsibility : Home page: banner, choice of a synthetic case (list or typed ID), run of the case,
                  and the review queue sorted by the G11 priority (brief §13 element 1; J01, J02,
                  J03, J08, J09). Launched by: .venv/bin/python -m streamlit run app/Home.py (I74 P7)
-Never does     : Import anything but streamlit, the orchestrator and ui_components (I72 D3); read
+Never does     : Import anything but streamlit, the orchestrator and ui_components (I72 D3; plus sys and pathlib, only for the import path, J6); read
                  the configuration or .env (app.config is passed on, never read, I74 P3); build or
                  check a case, compute a score, a band or a priority; sort the queue again; show
                  str(error) or a trace
@@ -14,10 +14,19 @@ Reference      : Architecture_Projet.md v1.5 — section 1.2, section 4 "Points 
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import streamlit as st
 
-from app import ui_components as ui
-from src.agent import orchestrator
+# Repository root on the import path: `streamlit run app/Home.py` (Streamlit Community Cloud) adds
+# only app/ to it, unlike the local `python -m streamlit run` (J6 hosted demo, outside the brief).
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app import ui_components as ui  # noqa: E402
+from src.agent import orchestrator  # noqa: E402
 
 st.set_page_config(page_title="Fraud Risk Intelligence — prototype", layout="wide")
 ui.show_banner()
