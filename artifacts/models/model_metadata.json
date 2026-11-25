@@ -1,0 +1,51 @@
+{
+  "excluded_columns": [
+    "nameOrig",
+    "nameDest",
+    "isFraud",
+    "isFlaggedFraud"
+  ],
+  "model_input_columns": [
+    "amount",
+    "oldbalanceOrg",
+    "oldbalanceDest",
+    "error_balance_orig",
+    "error_balance_dest",
+    "hour_of_day",
+    "type",
+    "is_risky_type"
+  ],
+  "model_name": "random_forest",
+  "objective": {
+    "alert_share": 0.0014596974202451191,
+    "near_threshold_margin": 0.05,
+    "review_capacity_per_day": 300,
+    "transactions_per_day": 205522
+  },
+  "params": {
+    "max_depth": 20
+  },
+  "risk_band_bounds": {
+    "high": 0.8516238554349536,
+    "medium": 0.5492405919533623
+  },
+  "saved_at": "2026-11-11T19:41:45+00:00",
+  "split": {
+    "seed": 42,
+    "strategy": "stratified",
+    "test_size": 0.15,
+    "val_size": 0.15
+  },
+  "threshold": 0.5492405919533623,
+  "train_rows": 1000000,
+  "validation_at_threshold": {
+    "f1": 0.8243809523809524,
+    "fn": 150,
+    "fp": 311,
+    "precision": 0.7767408470926059,
+    "recall": 0.8782467532467533,
+    "threshold": 0.5492405919533623,
+    "tn": 952851,
+    "tp": 1082
+  }
+}
