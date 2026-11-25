@@ -101,8 +101,9 @@ Generated artefacts:
 
 | Path | Content | Versioned |
 |---|---|---|
-| `artifacts/models/final_pipeline.joblib`, `mlp_state.pt` | Saved model pipeline and MLP weights | No (regenerate with the command above) |
-| `artifacts/models/model_metadata.json` | Model name, input columns, split, threshold, risk-band bounds | No (regenerated) |
+| `artifacts/models/final_pipeline.joblib` | Saved model pipeline (the model the app loads) | Yes, for the hosted demo (regenerate with the command above) |
+| `artifacts/models/mlp_state.pt` | MLP weights | No (regenerate with the command above) |
+| `artifacts/models/model_metadata.json` | Model name, input columns, split, threshold, risk-band bounds | Yes, for the hosted demo (regenerated) |
 | `artifacts/metrics/` | `comparison_table.csv`, `threshold_analysis.csv`, `error_analysis.csv`, `test_results.json` | Yes |
 | `artifacts/figures/` | `fig01`–`fig06` (EDA, notebook 01), `fig07`–`fig10` (training), `eda2_*` (notebook 02) | Yes |
 
@@ -157,8 +158,8 @@ To re-execute the notebooks, `nbconvert` and `ipykernel` are also needed (not in
    a state change without its audit line, or the reverse.
 8. **Fake client wording for a case without evidence.** The recommended review step of the fake draft still
    says "Review the transaction details and the evidence items listed" when no evidence is listed.
-9. **Training is not run in CI.** The PaySim file and the trained model are not versioned, so the full
-   training and the two failure proofs can only be reproduced locally.
+9. **Training is not run in CI.** The PaySim file is not versioned, so the full training can only be
+   reproduced locally. The two failure proofs use the trained model and are run locally, not in CI.
 10. **Local prototype.** No authentication, single user, SQLite. Not designed for production or for any
     real decision.
 
