@@ -1,4 +1,4 @@
-> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Architecture_Projet.md, version du 2026-11-20 (v1.6). Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
+> COPIE en lecture seule — source : [DOSSIER_PROJET]/00_ritual/Architecture_Projet.md, version du 2026-11-25 (v1.7). Ne pas modifier ici : une correction se propose au §6 de PASSATION.md.
 
 # ARCHITECTURE PROJET — Capstone_Project_1
 
@@ -6,7 +6,8 @@
 >   `Syllabus_Mapping.md` v1.0 ; `01_Architecture_Globale.md` (§2bis), `02_Architecture_Globale_AI.md`, `03_Architecture_Globale_ML.md` ;
 >   `02_BUILD/00_Build_Control.md` (précondition d'ouverture du build) ; énoncé du 18 octobre 2026 (§11, §13, §14, §16) · système v2.3.4
 > - Contrôle indépendant réalisé par : aucun
-> - Date : 2026-10-20 · Version : **v1.6** (2026-11-20) ; v1.5 (2026-11-19) ; v1.4 (2026-11-18) ; v1.3 (2026-11-12) ; v1.2 (2026-11-12) ; v1.1 (2026-11-04) — v1.0 **VALIDÉ par Erman le 2026-10-20** (v0.1 : même contenu) · Confidentialité : document INTERNE
+> - Date : 2026-10-20 · Version : **v1.7** (2026-11-25) ; v1.6 (2026-11-20) ; v1.5 (2026-11-19) ; v1.4 (2026-11-18) ; v1.3 (2026-11-12) ; v1.2 (2026-11-12) ; v1.1 (2026-11-04) — v1.0 **VALIDÉ par Erman le 2026-10-20** (v0.1 : même contenu) · Confidentialité : document INTERNE
+> - **Changement de la v1.7** (2026-11-25, J6 — démo hébergée sur Streamlit Community Cloud, souhait d'Erman **hors énoncé** ; PR #28 à #31) : §2 — démo hébergée, Python 3.13, `app/requirements.txt` ; D-15 — `final_pipeline.joblib` et `model_metadata.json` désormais versionnés (8,8 Mo, pour que l'app en ligne note un cas ; `mlp_state.pt` reste ignoré) ; §7 et §8 — n° 03bis `app/requirements.txt` (racine moins `torch` et `pytest`, mêmes versions : l'app n'importe jamais torch) ; n° 01 `.gitignore` en conséquence ; n° 67 à 69 — `sys` et `pathlib` autorisés, **seulement** pour mettre la racine du dépôt dans le chemin d'import (le cloud lance `streamlit run app/Home.py` sans `python -m`) ; I72 D3 élargie d'autant, `tests/test_app.py` aligné. App en ligne : https://fraud-risk-prototype.streamlit.app (faux client LLM, aucune clé ; base SQLite recréée vide à chaque redémarrage). Le lancement local reste `.venv/bin/python -m streamlit run app/Home.py`.
 > - **Changement de la v1.6** (2026-11-20, fin du J5 — Q-37, Q-42, Q-44, Q-51 ; I75, I76) : §8 — n° 14bis `notebooks/02_eda_complete.ipynb` (I76 ①) ; n° 15 `data/README.md` en anglais (I76 ②) ; n° 34 fonctions d'écriture de la revue (Q-37 (1)) ; n° 62bis `record_review`, `open_database`, dépend de `db.py` (Q-37 (2), Q-42 (4)) ; n° 62quinquies `read_demo_cases.py` (Q-42 (1)) ; n° 63 fonctions publiques d'écriture et de l'interface (Q-37 (3), Q-42 (3)) ; n° 66 à 69 testés par `tests/test_app.py` (n° 69bis, Q-42 (2), (5)) ; n° 68 champ « Case ID » (I75 (1)) ; n° 71 `test_secrets_not_logged` existe ; n° 71bis `tests/test_s14_examples.py` (Q-51) ; n° 72 écrit (PR 16, K02, K06). Lancement de l'app : `.venv/bin/python -m streamlit run app/Home.py` (Q-42 (6)).
 > - **Changement de la v1.5** (2026-11-19, décisions d'Erman au J5 — I64, I65, I67, I69 ; Q-33, Q-35) : §1.2 — 8 outils (et non 5) ; §8 — n° 34 `list_cases_in_state` (lecture seule) ; n° 35 `list_all_events`, `secret_keys_in` (lecture seule) ; n° 65 dépendances et tests réels ; n° 63 : 4 fonctions publiques de lecture, dépend de `read_cases.py`, `read_audit.py`, `routing_policy.py` ; ajout des outils `read_cases.py` (n° 62ter) et `read_audit.py` (n° 62quater), `TOOL_EFFECT = "read_only"`.
 > - **Changement de la v1.4** (2026-11-18, décisions d'Erman pendant le J4, recopiées au début du J5 — I63) : §8 — dépendances et tests réels des fichiers du J4 (Q-18 `errors.py`, Q-20 validateur, Q-23 client LLM et `httpx2`, Q-25 `prompt_builder.py`, Q-27 `retry.py` et `routing_policy.py`, Q-32 `orchestrator.py`) ; ajout de `src/agent/tools/update_case.py` (n° 62bis, seul outil qui écrit le cas, Q-28, Q-30) ; n° 65 `audit_export.py` passé au J5 (I62).
@@ -165,7 +166,7 @@ flowchart TB
 | 3 — Logic Engine | Python ; Pydantic v2 (schéma du brouillon) ; scikit-learn (application du pipeline) | `src/agent/validators/investigation_validator.py` | Validation déterministe, séparée du LLM (§10.3) ; Pydantic donne les champs requis et les types |
 | 2 — Ingestion/Parser | Python ; `sqlite3` (bibliothèque standard) ; `joblib` | `src/storage/case_repository.py` | Rien à installer ; une seule couche connaît le SQL |
 | Data | SQLite (un fichier local, non versionné) ; JSON (cas et preuves de démo, versionnés) ; artefacts du modèle | `src/storage/db.py` | Choix d'Erman ; la contrainte d'unicité sur la clé d'idempotence bloque les doublons au niveau de la base (D-07) |
-| Infrastructure (hors couches) | Environnement Python local (`venv`) ; `requirements.txt` aux versions épinglées ; pas de Docker ni de serveur | `requirements.txt` | L'énoncé demande une app locale reproductible depuis le README (§15 A) |
+| Infrastructure (hors couches) | Environnement Python local (`venv`) ; `requirements.txt` aux versions épinglées ; pas de Docker ni de serveur ; **démo hébergée** hors énoncé sur Streamlit Community Cloud, Python 3.13, dépendances de `app/requirements.txt` (v1.7) | `requirements.txt`, `app/requirements.txt` | L'énoncé demande une app locale reproductible depuis le README (§15 A) ; la démo en ligne est un ajout d'Erman (J6) |
 | Entraînement ML (hors couches) | pandas, scikit-learn (Pipeline, ColumnTransformer, LogisticRegression, RandomForest, HistGradientBoosting en option), **PyTorch** (MLP), matplotlib / seaborn, SHAP **ou** importance par permutation (D-11), joblib | `src/train.py` | Imposé ou conseillé par l'énoncé (§6–§9) ; PyTorch, choix d'Erman : la boucle d'entraînement reste visible |
 
 ---
@@ -466,7 +467,7 @@ stateDiagram-v2
 | **D-12** Le pipeline sauvegardé (prétraitement + modèle) et ses métadonnées (`model_metadata.json` : nom, version, date d'entraînement, seuil, bornes des bandes) sont chargés par `model_io.py` ; **`model_metadata.json` est la source unique du seuil et des bornes** (v1.1, I20 : le seuil est un produit de l'entraînement et voyage avec le modèle) ; le service ne refait **jamais** le prétraitement à la main | `03_Architecture_Globale_ML.md` §2 ; énoncé §7.2, §13 élément 4 |
 | **D-13** Code partagé entre l'entraînement et le service : `src/features/build_features.py` doit être importable au chargement du pipeline (transformateurs personnalisés) | Condition technique de joblib ; à défaut, le chargement échoue |
 | **D-14** Paquets Python sans `__init__.py` (paquets d'espace de noms) ; `pyproject.toml` règle `pythonpath` pour pytest | Moins de fichiers vides dans le registre ; imports stables `src.…` |
-| **D-15** Ce qui n'est pas versionné : `data/raw/`, `data/runtime/`, `.env`, `artifacts/models/` ; ce qui est versionné : `data/demo/*.json`, `artifacts/metrics/`, `artifacts/figures/` | Énoncé §3.1, §16 (pas de données brutes) ; le README régénère le modèle (§15 A) |
+| **D-15** Ce qui n'est pas versionné : `data/raw/`, `data/runtime/`, `.env`, `artifacts/models/mlp_state.pt` ; ce qui est versionné : `data/demo/*.json`, `artifacts/metrics/`, `artifacts/figures/`, et depuis la v1.7 `artifacts/models/final_pipeline.joblib` et `artifacts/models/model_metadata.json` | Énoncé §3.1, §16 (pas de données brutes) ; le README régénère le modèle (§15 A) ; v1.7 : les 2 fichiers chargés par l'app (8,8 Mo) sont versionnés pour la démo hébergée (J6, hors énoncé, PR #28) |
 | **D-16** Langue : code, interface, README et documents rendus en anglais | `Document_Maitre.md` §8.9 |
 
 ---
@@ -601,6 +602,7 @@ capstone-project-1/
 │           └── investigation_validator.py
 ├── app/
 │   ├── Home.py
+│   ├── requirements.txt
 │   ├── ui_components.py
 │   └── pages/
 │       ├── 1_Case_Review.py
@@ -661,9 +663,10 @@ capstone-project-1/
 
 | Chemin complet | Responsabilité unique | Couche | Statut | Dépendances autorisées | Dépendances interdites | Ordre | Test associé |
 |---|---|---|---|---|---|---|---|
-| `.gitignore` | Exclure données brutes, base, `.env`, modèles | Configuration | J1 | — | — | 01 | `tests/test_security.py` (aucun secret ni donnée versionnée) |
+| `.gitignore` | Exclure données brutes, base, `.env`, modèles (sauf les 2 fichiers chargés par l'app, v1.7) | Configuration | J1 | — | — | 01 | `tests/test_security.py` (aucun secret ni donnée versionnée) |
 | `.env.example` | Lister les variables d'environnement, sans valeurs | Configuration | J1 | — | — | 02 | `tests/test_security.py` |
 | `requirements.txt` | Dépendances épinglées | Infrastructure | J1 | — | — | 03 | Justification : vérifié par l'installation propre (K07) |
+| `app/requirements.txt` | Dépendances de la démo hébergée seulement : celles de la racine moins `torch` et `pytest`, mêmes versions (Streamlit lit ce fichier avant celui de la racine) | Infrastructure | J6 (v1.7, hors énoncé) | — | `torch`, `pytest` | 03bis | Justification : comparé par script au fichier de la racine ; build Streamlit Community Cloud réussi (PR #30) |
 | `pyproject.toml` | Configuration de pytest (`pythonpath`, marqueurs dont `validation_workflow`) | Configuration | J1 | — | — | 04 | Justification : utilisé par chaque exécution de pytest |
 | `README.md` | Mode d'emploi complet (6 rubriques §16.1) | Documentation | J1 → J6 | — | — | 05 | Justification : essai sur environnement propre (K07) |
 | `configs/settings.yaml` | Valeurs réglables d'exploitation : essais, délais, marge « proche du seuil », chemins — **jamais** le seuil ni les bornes des bandes (source unique : `model_metadata.json`, D-12, v1.1) | Configuration | J1 | — | Aucun secret ; seuil et bornes | 06 | `tests/test_orchestrator.py` |
@@ -734,9 +737,9 @@ capstone-project-1/
 | `tests/test_orchestrator.py` | Cas normal → HUMAN_REVIEW ; rejet après N essais ; délai d'outil → FAILED ; VALIDATED → toujours en revue ; idempotence ; priorité (marqués `validation_workflow`) | Tests | J4 | orchestrateur + faux client | Réseau | 64 | (fichier de test) |
 | `src/audit/audit_export.py` | Exporter l'audit d'un cas ou de tous les cas en CSV et en JSON | 3 — Logic Engine | J5 (I62) | `audit_repository.py` (+ `csv`, `io`, `json`, `math` de Python — Q-33) | Écrire dans la base ; écrire un fichier ; `sqlite3`, pandas | 65 | `tests/test_review_and_audit.py::test_audit_export` (37 tests, Q-33) |
 | `app/ui_components.py` | Bandeau du prototype, rendu des messages d'erreur, badges (bande, statut du validateur) | 5 — UI | J5 | Streamlit | Orchestrateur, logique | 66 | `tests/test_app.py` (AppTest ; imports vérifiés par `ast`) — v1.6, Q-42 (5) |
-| `app/Home.py` | Accueil : bandeau, choix ou saisie d'un cas, lancement, file de revue triée | 5 — UI | J5 | `orchestrator.py`, `ui_components.py` | Couches 1–3 | 67 | `tests/test_app.py` (AppTest ; imports vérifiés par `ast`) — v1.6, Q-42 (5) |
-| `app/pages/1_Case_Review.py` | Les éléments 2 à 10 de §13 pour un cas, et la saisie de la décision ; champ « Case ID » quand la page est ouverte sans cas choisi (v1.6, I75 (1)) | 5 — UI | J5 | `orchestrator.py`, `ui_components.py` | Couches 1–3 | 68 | `tests/test_app.py` (AppTest ; imports vérifiés par `ast`) — v1.6, Q-42 (5) |
-| `app/pages/2_Audit_Trail.py` | Élément 11 : piste d'audit visible + export CSV / JSON | 5 — UI | J5 | `orchestrator.py`, `ui_components.py` | Couches 1–3 | 69 | `tests/test_app.py` (AppTest ; imports vérifiés par `ast`) — v1.6, Q-42 (5) |
+| `app/Home.py` | Accueil : bandeau, choix ou saisie d'un cas, lancement, file de revue triée | 5 — UI | J5 | `orchestrator.py`, `ui_components.py` ; `sys`, `pathlib` pour le chemin d'import seulement (v1.7) | Couches 1–3 | 67 | `tests/test_app.py` (AppTest ; imports vérifiés par `ast`) — v1.6, Q-42 (5) |
+| `app/pages/1_Case_Review.py` | Les éléments 2 à 10 de §13 pour un cas, et la saisie de la décision ; champ « Case ID » quand la page est ouverte sans cas choisi (v1.6, I75 (1)) | 5 — UI | J5 | `orchestrator.py`, `ui_components.py` ; `sys`, `pathlib` pour le chemin d'import seulement (v1.7) | Couches 1–3 | 68 | `tests/test_app.py` (AppTest ; imports vérifiés par `ast`) — v1.6, Q-42 (5) |
+| `app/pages/2_Audit_Trail.py` | Élément 11 : piste d'audit visible + export CSV / JSON | 5 — UI | J5 | `orchestrator.py`, `ui_components.py` ; `sys`, `pathlib` pour le chemin d'import seulement (v1.7) | Couches 1–3 | 69 | `tests/test_app.py` (AppTest ; imports vérifiés par `ast`) — v1.6, Q-42 (5) |
 | `tests/test_app.py` | Tests de l'interface (n° 66 à 69) avec AppTest : rendu, messages d'erreur fixes, `st.text` pour les données, champ « Case ID » | Tests | J5 | `app/`, orchestrateur (remplacé par la fixture `ui_env`) | Réseau, vrai modèle | 69bis | (fichier de test) — v1.6, Q-42 (2) |
 | `tests/test_review_and_audit.py` | Décision enregistrée ; échec de validation visible dans la vue ; soumission en double ; export | Tests | J5 | orchestrateur, dépôts, export | Réseau | 70 | (fichier de test) |
 | `tests/test_security.py` | Injection traitée comme non fiable ; secrets absents des logs ; aucun outil financier ; aucune donnée sensible ni étiquette dans les fichiers versionnés ; prompt limité aux champs autorisés | Tests | J5 | tout `src/` | Réseau | 71 | (fichier de test) — v1.6 : `test_secrets_not_logged` ajouté (PR 16) |
