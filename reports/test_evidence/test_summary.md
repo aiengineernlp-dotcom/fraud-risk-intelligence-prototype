@@ -216,22 +216,99 @@ show(audit, lambda e: e["actor"] == "tool:retrieve_case_evidence" or e["state_to
 
 The script is read on standard input (`-`) so that the repository root is on the import path.
 
-## 6. Application screenshots (founder) — Captures de l'application (fondateur)
+## 6. Application screenshots (founder)
 
-The agent does not launch the application and does not produce screenshots (Q-50). To be captured by the founder after a real
-launch: `.venv/bin/python -m streamlit run app/Home.py` (real local model; LLM provider as configured in `.env`, or the fake
-client). Each screenshot should keep the banner visible.
+Captured by the founder on 2026-11-25 (dry run, +04:00) after a real launch: `.venv/bin/python -m streamlit run app/Home.py`,
+real local model, **no `.env` file → fake LLM client** (`src/config.py`: `DEFAULT_PROVIDER = "fake"`; `LLM_PROVIDER` empty in the
+shell). Fresh runtime database at the start of the run. The banner is visible on every page. Files are in
+[`screenshots/`](screenshots/); a long page is split into several images (a, b, c…).
 
-| # | Page | Case / action | What must be visible |
-|---|---|---|---|
-| 1 | Home | Start of the app | Banner "Educational prototype — synthetic data only…"; demo case list; review queue (high priority first) |
-| 2 | Case review | A validated case in human review (e.g. a high-band demo case) | Verified fields, score + band + threshold, model version, evidence with `EV-` IDs, "AI draft for human review" with its references, uncertainty notes, validator status "passed", decision buttons |
-| 3 | Case review | The same case after a decision with a comment | "Decision recorded: …" and the comment as plain text |
-| 4 | Case review | A rejected draft (validator failure, e.g. fake client scenario `malformed`) | Validation failure message, the reasons, **no** draft shown, validator status "failed" |
-| 5 | Case review | A case in FAILED after a tool failure (e.g. evidence store unavailable) | The fixed failure message of the step; no trace |
-| 6 | Case review | Opened from the menu without a case: "Case ID" field, unknown ID typed | The fixed "input was refused" message; the typed ID is not shown |
-| 7 | Audit trail | The FAILED case of screenshot 5 | `tool_call` rows of `tool:retrieve_case_evidence` with result `failed`, then the transition SCORED → FAILED; number of events; CSV and JSON export buttons |
-| 8 | Audit trail | The rejected case of screenshot 4 | `tool_call` rows of `llm` with result `rejected`, then DRAFTED → VALIDATION_REJECTED |
+| # | Page | Case / action | What must be visible | File(s) |
+|---|---|---|---|---|
+| 1 | Home | Start of the app | Banner "Educational prototype — synthetic data only…"; demo case list; review queue (high priority first) | `s1_home.png` |
+| 2 | Case review | CASE-0006, validated, high band (score 0.99986), in human review | Verified fields, score + band + threshold, model version, evidence `EV-0019`…`EV-0023`, "AI draft for human review" with its references, uncertainty notes, validator status "passed", decision buttons | `s2a`…`s2e_case_review_case0006.png` |
+| 3 | Case review | CASE-0006 after the decision "Escalate" with a comment | "Decision recorded: Escalate" and the comment as plain text | `s3_decision_case0006.png` |
+| 4 | Case review | CASE-0001, rejected draft (fake client scenario `malformed`, see note) | Validation failure message, the reason ("malformed JSON…"), **no** draft shown, validator status "failed" | `s4a`…`s4c_rejected_case0001.png` |
+| 5 | Case review | CASE-0004 in FAILED after a tool failure (evidence store unavailable, see note) | The fixed failure message of the step; no trace; validator "not run"; no decision possible | `s5a`, `s5b_failed_case0004.png` |
+| 6 | Case review | Opened from the menu without a case; unknown ID `CASE-9999` typed | The fixed "input was refused" message; the typed ID is not repeated in the message | `s6_unknown_case_id.png` |
+| 7 | Audit trail | The FAILED case of screenshot 5 | 3 `tool_call` rows of `tool:retrieve_case_evidence` with result `failed` (`ToolUnavailableError`), then the transition SCORED → FAILED; number of events; CSV and JSON export buttons | `s7a`, `s7b_audit_case0004.png` |
+| 8 | Audit trail | The rejected case of screenshot 4 | 3 `tool_call` rows of `llm` with result `rejected`, then DRAFTED → VALIDATION_REJECTED | `s8a`, `s8b_audit_case0001.png` |
+
+**How the two failures were produced (provoked on purpose, no code changed).** The running app always uses the fake client
+scenario `valid`, so a failure never happens on its own: it was injected, and only its cause is simulated.
+
+- **Screenshots 4 and 8 — malformed draft.** *Simulated:* the LLM answer only (malformed JSON on every attempt). *Real:* the
+  model score, the evidence, the validator that rejects, the 2 new attempts, the state machine (`VALIDATION_REJECTED`), the audit
+  and the screen without a draft. Produced by the script below, kept outside the repository and run once, app stopped, from the
+  repository root: `.venv/bin/python - < seed_rejected_case.py`. Output: `case_id=CASE-0001 state=VALIDATION_REJECTED draft=None`,
+  `validation_reasons=['malformed JSON: Unterminated string starting at (position 39)']`.
+- **Screenshots 5 and 7 — tool failure.** *Simulated:* the absence of the evidence file only
+  (`mv data/demo/evidence_store.json data/demo/evidence_store.json.off`, CASE-0004 submitted in the app, then the file moved back;
+  `git status` clean afterwards). *Real:* the `ToolUnavailableError` raised by `retrieve_case_evidence`, the 3 attempts, `FAILED`,
+  the audit and the fixed message.
+- During the dry run, CASE-0003 (no evidence, medium band) was escalated by mistake with a comment meant for CASE-0006; no
+  screenshot uses it, and the demo video is recorded from a fresh database.
+
+<details><summary>Script used for screenshots 4 and 8 (<code>seed_rejected_case.py</code>)</summary>
+
+```python
+# Dry run (J6, step 4): put ONE rejected case into the app's own database, so that the Streamlit app can
+# show a malformed-output example (video element 4, screenshots 4 and 8 of test_summary.md §6).
+# Adapted from capture_failures.py (test_summary.md §5). Kept OUTSIDE the repository; changes no code.
+# Run from the repository root, app stopped:
+#   .venv/bin/python - < ../../01_sessions/J6_essai/seed_rejected_case.py
+# What it does: submits CASE-0001 with the fake LLM client forced to the scenario "malformed" on every
+# attempt (1 + 2 retries from configs/settings.yaml), using the real local model and the versioned demo files.
+# It builds the configuration by hand from configs/settings.yaml: never load_config(), never .env
+# (fake client, empty key). It writes only into data/runtime/capstone.db (git-ignored).
+import sys
+from pathlib import Path
+
+import yaml
+
+from src.agent import orchestrator
+from src.agent.llm.fake_client import DraftFacts, FakeLLMClient
+from src.agent.tools.score_transaction import load_scoring_model
+from src.config import AppConfig, LLMSettings, Paths, RetrySettings, Secret, SplitSettings
+
+CASE_ID = "CASE-0001"
+SCENARIO = "malformed"
+
+s = yaml.safe_load(Path("configs/settings.yaml").read_text(encoding="utf-8"))
+p = {name: Path(value) for name, value in s["paths"].items()}
+db = p["runtime_db"]  # data/runtime/capstone.db, the database the app reads
+db.parent.mkdir(parents=True, exist_ok=True)
+
+config = AppConfig(
+    tool_retries=RetrySettings(s["retries"]["tools"]["max_retries"],
+                               float(s["retries"]["tools"]["timeout_seconds"])),
+    llm_retries=RetrySettings(s["retries"]["llm"]["max_retries_after_rejection"],
+                              float(s["retries"]["llm"]["timeout_seconds"])),
+    near_threshold_margin=s["routing"]["near_threshold_margin"],
+    review_capacity_per_day=s["routing"]["review_capacity_per_day"],
+    split=SplitSettings(**s["split"]),
+    paths=Paths(raw_data_dir=p["raw_data_dir"], runtime_db=db, demo_cases=p["demo_cases"],
+                evidence_store=p["evidence_store"], model_pipeline=p["model_pipeline"],
+                mlp_state=p["mlp_state"], model_metadata=p["model_metadata"],
+                metrics_dir=p["metrics_dir"], figures_dir=p["figures_dir"],
+                prohibited_terms=p["prohibited_terms"]),
+    llm=LLMSettings(provider="fake", base_url="", model="", api_key=Secret("")),
+)
+model = load_scoring_model(p["model_pipeline"], p["model_metadata"])
+app = orchestrator.AppResources(
+    config=config, scoring_model=model,
+    make_llm_client=lambda cid, score, ev: FakeLLMClient(SCENARIO, DraftFacts.from_official(cid, score, ev)))
+
+with orchestrator.open_connection(config) as conn:
+    outcome = orchestrator.submit_demo_case(CASE_ID, conn=conn, app=app)
+
+print(f"database={db}")
+print(f"case_id={outcome.case_id} state={outcome.state.value} draft={outcome.draft}")
+print(f"validation_reasons={list(outcome.validation_reasons)}")
+if outcome.state.value != "VALIDATION_REJECTED":
+    sys.exit("UNEXPECTED: the case did not end in VALIDATION_REJECTED — stop and show this output")
+```
+</details>
 
 ## 7. Known limits
 
