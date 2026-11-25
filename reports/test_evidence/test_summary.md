@@ -125,7 +125,7 @@ repository root:
 .venv/bin/python - <tmp> < capture_failures.py
 ```
 
-Requirements: the trained model in `artifacts/models/` (not versioned: `python -m src.train`, J3). The script builds its
+Requirements: the trained model in `artifacts/models/` (`python -m src.train`, J3; the two files the app loads are versioned since J6). The script builds its
 configuration by hand from `configs/settings.yaml`: it never calls `load_config()` and never reads `.env`; the LLM client is
 the fake one. It writes only into `<tmp>` (one SQLite file per proof). Durations (`duration_seconds`) change from run to run.
 
@@ -316,8 +316,8 @@ if outcome.state.value != "VALIDATION_REJECTED":
    R081) refuses a missing target and does not refuse a missing feature at load time. The behaviour of the model step on a
    missing feature value is not defined; a missing amount in a case input is refused (`parse_case_input`).
 2. **Training pipeline**: the tests train the 4 candidates on an invented set; the full `python -m src.train` on PaySim cannot run in
-   CI (`data/raw/` and `artifacts/models/` are not versioned).
-3. **Proofs 1 and 2** need the local trained model: they cannot be re-run in CI.
+   CI (`data/raw/` is not versioned).
+3. **Proofs 1 and 2** need the trained model: they are run locally, not in CI.
 4. **Fake client, case without evidence (Q-52, open)**: the summary now says that no evidence item is listed (I75 (2)), but the
    recommended review step of the fake "valid" draft still reads "Review the transaction details and the evidence items listed."
    Left unchanged by decision of the founder.
